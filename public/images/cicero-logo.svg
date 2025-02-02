@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="120" height="40" viewBox="0 0 120 40" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .logo-text {
+      font-family: 'Arial', sans-serif;
+      font-size: 24px;
+      font-weight: bold;
+      fill: currentColor;
+    }
+  </style>
+  <text x="10" y="28" class="logo-text">Cicero</text>
+</svg>

@@ -1,81 +1,81 @@
-import Litellm from "litellm"; // Import litellm
-
-Litellm.api_key = process.env.LITELLM_API_KEY; // Or however you are setting your API key
+import { AIConfig, AIRequestParams } from "./types";
 
 export class AI {
-  //#engine: webllm.MLCEngineInterface | undefined; // Removed webllm engine
+  #loaded = true;
+  private readonly config: AIConfig;
 
-  #loaded = false;
+  constructor(config: AIConfig = {}) {
+    this.config = {
+      apiEndpoint: 'http://127.0.0.1:5002',
+      maxRetries: 3,
+      retryDelay: 1000,
+      ...config
+    };
+  }
 
   loaded() {
     return this.#loaded;
   }
 
-  // Removed webllm.InitProgressCallback type
-  constructor(
-    private readonly initProgressCallback: any
-  ) { }
-
   async load() {
-    /* Removed webllm loading logic
-    this.#engine = await webllm.CreateMLCEngine(
-      "Llama-3.2-3B-Instruct-q4f32_1-MLC",
-      {
-        initProgressCallback: this.initProgressCallback,
-      }
-    );
-    this.#loaded = true;
-    */
-    this.#loaded = true; // Mock loaded state for litellm (adjust loading logic as needed)
+    // No loading needed for backend API
+    return Promise.resolve();
   }
-
-  async completion(
-    prefix: string,
-    onUpdate: (v: string, abort: () => void) => void
-  ) {
-    // Placeholder -  Direct completion is not used in chat, using request instead
-    onUpdate("Direct completion is not used in this chat demo.", abort);
-    return "Direct completion is not used in this chat demo.";
-  }
-
 
   async request(
-    request: any, // Assuming request has a messages array
-    onUpdate: (v: string, abort: () => void) => void
-  ): Promise<any> { // Added Promise<any> and return type
+    params: AIRequestParams,
+    onUpdate: (text: string, abort: () => void) => void
+  ): Promise<string> {
     let shouldAbort = false;
-    const abort = () => {
+    const abortFn = () => {
       shouldAbort = true;
     };
+    let fullMessage = "";
 
     try {
-      const responseStream = await Litellm.completion({
-        model: "gpt-3.5-turbo", // Or your desired model
-        messages: request.messages,
-        stream: true,
+      // Determine the endpoint
+      const endpoint = params.endpoint || 'generate';
+      const response = await fetch(`${this.config.apiEndpoint}/api/ai/${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: params.messages[params.messages.length - 1].content,
+          temperature: params.temperature
+        }),
       });
 
-      if (!responseStream) {
-        throw new Error("Failed to get response stream from Litellm."); // Throw error if no stream
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
       }
 
-      let message = "";
-      for await (const chunk of responseStream) {
-        if (shouldAbort) {
-          responseStream.abort();
-          return; // early return if aborted
-        }
-        const textChunk = chunk.choices?.[0]?.delta?.content || "";
-        message += textChunk;
-        onUpdate(message, abort);
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Response body reader not available");
       }
-      return message; // Return the complete message
-    } catch (e: any) { // Catching as any to access error message
-      console.error("Litellm API error:", e);
-      // More informative error message for UI if needed
-      const errorMessage = e.message || "An error occurred while processing your request.";
-      onUpdate(`Error: ${errorMessage}`, abort); // Send error message to chat UI
-      throw new Error(`Litellm API request failed: ${errorMessage}`); // Re-throw to be caught by the caller (handleChatSubmit)
+
+      while (true) {
+        if (shouldAbort) {
+          reader.cancel();
+          return fullMessage;
+        }
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        const textChunk = new TextDecoder().decode(value);
+        fullMessage += textChunk;
+        onUpdate(fullMessage, abortFn);
+      }
+      return fullMessage;
+
+    } catch (error: any) {
+      console.error("API request failed:", error);
+      const errorMessage = error.message || "An error occurred.";
+      onUpdate(`Error: ${errorMessage}`, abortFn);
+      throw new Error(`API request failed: ${errorMessage}`);
     }
   }
 }

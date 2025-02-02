@@ -1,0 +1,45 @@
+# .aiderrules
+
+## Project Setup Instructions for AI Assistants
+
+### Dependencies
+- The project uses `litellm` with Google Gemini for AI capabilities
+- Install dependencies with `pnpm install`
+
+### Configuration
+- **API Keys:**
+    - Google Gemini API key is required
+    - Set it as an environment variable named `GOOGLE_API_KEY`
+- **Model Selection:**
+    - The project is configured to use the Google Gemini model "gemini-pro" via Litellm
+    - This configuration is in `src/app/api/ai/ai.ts`
+
+### Key File Locations
+- **AI Backend Logic:** `src/app/api/ai/ai.ts`
+- **AI View Integration:** `src/app/api/ai/viewAI.ts`
+- **Chat Component:** `src/app/combini/Chat.tsx`
+- **Layout Component:** `src/app/combini/Main.tsx`
+- **Topbar Component:** `src/app/combini/Topbar.tsx`
+- **Logo:** `public/images/cicero-logo.svg`
+
+### Features
+1. **Text Editor with AI Integration:**
+   - Auto-completion (Cmd/Ctrl + .)
+   - Proofreading (Cmd/Ctrl + ')
+   - Smart expansion (Tab after <prompt>)
+   - Text rewriting (Tab after [text])
+
+2. **Chat Interface:**
+   - Located in the left sidebar
+   - Real-time streaming responses
+   - Markdown support
+   - Message history
+
+3. **UI Components:**
+   - Cicero branding in the topbar
+   - Loading progress indicator
+   - Responsive layout
+
+### Development
+- Run the development server with `pnpm dev`
+- Build for production with `pnpm build`

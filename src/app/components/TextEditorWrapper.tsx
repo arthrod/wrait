@@ -1,6 +1,6 @@
 "use client";
 
-import { MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
+import { MutableRefObject, useEffect, useRef, useState } from "react";
 import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { keymap } from "prosemirror-keymap";
@@ -59,8 +59,6 @@ function makeInitialState() {
     doc: initial,
     plugins: [
       history(),
-      // buildInputRules(options.schema),
-      // keymap(buildKeymap(options.schema, options.mapKeys)),
       keymap(baseKeymap),
       keymap({
         "mod-z": undo,
@@ -102,7 +100,6 @@ export const TextEditorWrapper = ({
   hasLoadedAI: boolean;
 }) => {
   const domRef = useRef<HTMLDivElement>() as MutableRefObject<HTMLDivElement>;
-  // const [counter, setCounter] = useState(0);
   const viewRef = useRef<EditorView | null>(null);
   const [editorDerivedState, setEditorDerivedState] =
     useState<EditorDerivedState>({
@@ -144,26 +141,19 @@ export const TextEditorWrapper = ({
       },
     });
     view.focus();
-    const ai = new AI((s) => {
-      if (s.progress === 0) {
-        const match = s.text.match(/Loading.*\[([0-9]+)\/([0-9]+)\]:/);
-        if (match) {
-          const first = parseInt(match[1]);
-          const second = parseInt(match[2]);
-          onProgress(first / second);
-          return;
-        }
-      }
-      onProgress(s.progress);
+
+    // Initialize AI with backend configuration
+    const ai = new AI({
+      apiEndpoint: 'http://127.0.0.1:5002',
+      maxRetries: 3,
+      retryDelay: 1000
     });
     setAI(view, ai);
-    if ((navigator as any).gpu) {
-      ai.load()
-        .then(() => onHasLoadedAI())
-        .catch((e) => onLoadError(e.message));
-    } else {
-      onLoadError("This demo requires WebGPU support. Try Chrome?");
-    }
+
+    // No need to load since we're using the backend
+    onProgress(1);
+    onHasLoadedAI();
+
     viewRef.current = view;
   }, []);
 
@@ -184,6 +174,7 @@ export const TextEditorWrapper = ({
       ) ?? undefined
     );
   })();
+
   useEffect(() => {
     if (hoverElement) {
       const updatePopoverPosition = () => {
@@ -212,7 +203,6 @@ export const TextEditorWrapper = ({
   }, [hoverElement]);
 
   const smartExpansionState = editorDerivedState.smartExpansionState;
-
   const outerDomRef = useRef<HTMLDivElement>(null);
 
   return (

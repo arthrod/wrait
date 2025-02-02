@@ -72,9 +72,7 @@ export async function performAutoComplete(view: EditorView) {
   //   }
   // );
 
-  await getAI(view)?.request(
-    {
-      stream: true,
+  await getAI(view)?.request({
       messages: [
         {
           role: "user",

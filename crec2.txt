@@ -1,0 +1,1502 @@
+Project Path: src
+
+Source Tree:
+
+```
+src
+├── app
+│   ├── components
+│   │   └── ProseMIrror
+│   │       ├── schema.ts
+│   │       ├── proofReadPlugin.ts
+│   │       ├── smartExpansionPlugin.ts
+│   │       ├── actionsPlugin.ts
+│   │       ├── autoCompletePlugin.ts
+│   │       └── DocVisitor.ts
+│   ├── combini
+│   │   └── Main.module.css.d.ts
+│   └── api
+│       └── ai
+│           ├── viewAI.ts
+│           └── ai.ts
+├── env.d.ts
+└── polyfills.ts
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/components/ProseMIrror/schema.ts`:
+
+```ts
+   1 | import { Schema } from "prosemirror-model";
+   2 | import styles from "../TextEditorWrapper.module.css";
+   3 | 
+   4 | export const textSchema = new Schema({
+   5 |   nodes: {
+   6 |     text: {
+   7 |       group: "inline",
+   8 |     },
+   9 |     paragraph: {
+  10 |       group: "block",
+  11 |       content: "inline*",
+  12 |       toDOM() {
+  13 |         return ["p", 0];
+  14 |       },
+  15 |       parseDOM: [{ tag: "p" }],
+  16 |     },
+  17 |     doc: { content: "block+" },
+  18 |   },
+  19 |   marks: {
+  20 |     autoComplete: {
+  21 |       toDOM() {
+  22 |         return [
+  23 |           "span",
+  24 |           { contentEditable: "false", class: styles.autoComplete },
+  25 |           0,
+  26 |         ];
+  27 |       },
+  28 |     },
+  29 |   },
+  30 | });
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/components/ProseMIrror/proofReadPlugin.ts`:
+
+```ts
+   1 | import { getAI } from "@/app/api/ai/viewAI";
+   2 | import {
+   3 |   EditorState,
+   4 |   Plugin,
+   5 |   PluginKey,
+   6 |   TextSelection,
+   7 |   Transaction,
+   8 | } from "prosemirror-state";
+   9 | import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
+  10 | import { DiffMatchPatch } from "diff-match-patch-typescript";
+  11 | import { Node } from "prosemirror-model";
+  12 | import { Mapping } from "prosemirror-transform";
+  13 | import { DocConsumer, visit } from "./DocVisitor";
+  14 | import styles from "./../TextEditorWrapper.module.css";
+  15 | 
+  16 | export type State = {
+  17 |   state: "proofReading" | "waiting" | "idle";
+  18 |   activeProofRead: ProofRead | undefined;
+  19 |   proofReads: ProofRead[];
+  20 | };
+  21 | 
+  22 | // Define a plugin key for our proofreading plugin
+  23 | const proofreadingPluginKey = new PluginKey<State>("proofreading");
+  24 | 
+  25 | export type ProofRead = {
+  26 |   from: number;
+  27 |   to: number;
+  28 |   diff: string;
+  29 | };
+  30 | 
+  31 | type Command =
+  32 |   | {
+  33 |       type: "updateState";
+  34 |       state: "proofReading" | "waiting" | "idle";
+  35 |     }
+  36 |   | {
+  37 |       type: "replace";
+  38 |       proofReads: ProofRead[];
+  39 |     }
+  40 |   | {
+  41 |       type: "delete";
+  42 |       proofRead: ProofRead;
+  43 |     }
+  44 |   | {
+  45 |       type: "activate";
+  46 |       proofRead: ProofRead;
+  47 |     }
+  48 |   | {
+  49 |       type: "reset";
+  50 |     };
+  51 | 
+  52 | function getCommand(tr: Transaction): Command | undefined {
+  53 |   return tr.getMeta(proofreadingPluginKey);
+  54 | }
+  55 | 
+  56 | function setCommand(tr: Transaction, command: Command) {
+  57 |   return tr.setMeta(proofreadingPluginKey, command);
+  58 | }
+  59 | 
+  60 | function mapProofRead(item: ProofRead, mapping: Mapping) {
+  61 |   const newFrom = mapping.mapResult(item.from);
+  62 |   if (newFrom.deleted) {
+  63 |     return undefined;
+  64 |   }
+  65 |   const newTo = mapping.mapResult(item.to);
+  66 |   if (newTo.deleted) {
+  67 |     return undefined;
+  68 |   }
+  69 |   return {
+  70 |     from: newFrom.pos,
+  71 |     to: newTo.pos,
+  72 |     diff: item.diff,
+  73 |   };
+  74 | }
+  75 | 
+  76 | export const ProofReadPlugin = new Plugin<State>({
+  77 |   key: proofreadingPluginKey,
+  78 |   state: {
+  79 |     init() {
+  80 |       return { proofReads: [], activeProofRead: undefined, state: "idle" };
+  81 |     },
+  82 |     apply(tr, state) {
+  83 |       const command = getCommand(tr);
+  84 |       let newState: ProofRead[] = state.proofReads;
+  85 |       let activeProofRead = state.activeProofRead;
+  86 |       if (command) {
+  87 |         switch (command.type) {
+  88 |           case "updateState":
+  89 |             if (command.state === "waiting" && state.state === "proofReading") {
+  90 |               if (state.proofReads.length) {
+  91 |                 return {
+  92 |                   ...state,
+  93 |                   state: command.state,
+  94 |                   activeProofRead: state.proofReads[0],
+  95 |                 };
+  96 |               } else {
+  97 |                 return {
+  98 |                   ...state,
+  99 |                   state: "idle",
+ 100 |                   activeProofRead: undefined,
+ 101 |                 };
+ 102 |               }
+ 103 |             }
+ 104 |             return {
+ 105 |               ...state,
+ 106 |               state: command.state,
+ 107 |             };
+ 108 |           case "replace":
+ 109 |             return {
+ 110 |               proofReads: command.proofReads,
+ 111 |               activeProofRead: undefined,
+ 112 |               state: state.state,
+ 113 |             };
+ 114 |           case "delete":
+ 115 |             const index = state.proofReads.findIndex((r) => {
+ 116 |               return (
+ 117 |                 r.from === command.proofRead.from &&
+ 118 |                 r.to === command.proofRead.to
+ 119 |               );
+ 120 |             });
+ 121 |             newState = state.proofReads.filter((r) => {
+ 122 |               return (
+ 123 |                 r.from !== command.proofRead.from ||
+ 124 |                 r.to !== command.proofRead.to
+ 125 |               );
+ 126 |             });
+ 127 |             if (
+ 128 |               activeProofRead?.from === command.proofRead.from &&
+ 129 |               activeProofRead?.to === command.proofRead.to
+ 130 |             ) {
+ 131 |               activeProofRead = newState[index] ?? newState[0];
+ 132 |             }
+ 133 |             break;
+ 134 |           case "activate":
+ 135 |             if (
+ 136 |               state.proofReads.some((r) => {
+ 137 |                 return (
+ 138 |                   r.from === command.proofRead.from &&
+ 139 |                   r.to === command.proofRead.to
+ 140 |                 );
+ 141 |               })
+ 142 |             ) {
+ 143 |               activeProofRead = command.proofRead;
+ 144 |             }
+ 145 |             break;
+ 146 |           case "reset":
+ 147 |             return {
+ 148 |               proofReads: [],
+ 149 |               activeProofRead: undefined,
+ 150 |               state: "idle",
+ 151 |             };
+ 152 |           default:
+ 153 |             let _command: never = command;
+ 154 |         }
+ 155 |       }
+ 156 |       if (tr.mapping.maps.length) {
+ 157 |         newState = newState
+ 158 |           .map((s) => {
+ 159 |             return mapProofRead(s, tr.mapping);
+ 160 |           })
+ 161 |           .filter((s): s is ProofRead => {
+ 162 |             return !!s;
+ 163 |           });
+ 164 |       }
+ 165 | 
+ 166 |       return {
+ 167 |         proofReads: newState,
+ 168 |         state: state.state,
+ 169 |         activeProofRead:
+ 170 |           activeProofRead && mapProofRead(activeProofRead, tr.mapping),
+ 171 |       };
+ 172 |     },
+ 173 |   },
+ 174 |   props: {
+ 175 |     handleKeyDown(view, event) {
+ 176 |       if (event.key == "'" && event.metaKey) {
+ 177 |         proofread(view);
+ 178 |       }
+ 179 |     },
+ 180 |     decorations(state) {
+ 181 |       const pluginState = proofreadingPluginKey.getState(state);
+ 182 |       if (!pluginState) {
+ 183 |         return;
+ 184 |       }
+ 185 |       return DecorationSet.create(
+ 186 |         state.doc,
+ 187 |         createDiffsDecorations(state.doc, pluginState.proofReads)
+ 188 |       );
+ 189 |     },
+ 190 |   },
+ 191 | });
+ 192 | 
+ 193 | async function proofReadBlock(view: EditorView, from: number, to: number) {
+ 194 |   const itemsBefore: ProofRead[] =
+ 195 |     proofreadingPluginKey.getState(view.state)?.proofReads ?? [];
+ 196 |   const selectedText = view.state.doc
+ 197 |     .textBetween(from, to)
+ 198 |     .replace(/( |“|”|’)/g, (s) => {
+ 199 |       if (s === " ") {
+ 200 |         return " ";
+ 201 |       }
+ 202 |       if (s === "“" || s === "”") {
+ 203 |         return '"';
+ 204 |       }
+ 205 |       if (s === "’") {
+ 206 |         return "'";
+ 207 |       }
+ 208 |       return s;
+ 209 |     });
+ 210 | 
+ 211 |   // Call the proofreading API
+ 212 |   let curText = "";
+ 213 |   await getAI(view)?.request(
+ 214 |     {
+ 215 |       stream: true,
+ 216 |       messages: [
+ 217 |         {
+ 218 |           role: "user",
+ 219 |           content: `Proof read the text after --- and output a version with only spelling, grammatical, spacing and word-use mistakes fixed.
+ 220 | Note:
+ 221 | 1. Only correct words that are wrong. Improvement is not asked for.
+ 222 | 2. Maintain the original tone and style.
+ 223 | 3. Do not add new lines.
+ 224 | 4. Only output the corrected text without anything else before or after.
+ 225 | ---
+ 226 | ${selectedText}`,
+ 227 |         },
+ 228 |       ],
+ 229 |       temperature: 0,
+ 230 |     },
+ 231 |     (text) => {
+ 232 |       const { state } = view;
+ 233 |       curText = text;
+ 234 |       // Update the plugin state with the proofreading results
+ 235 |       const diffs = generateProofReads(selectedText, curText, from, false);
+ 236 |       view.dispatch(
+ 237 |         setCommand(state.tr, {
+ 238 |           type: "replace",
+ 239 |           proofReads: [...itemsBefore, ...diffs],
+ 240 |         })
+ 241 |       );
+ 242 |     }
+ 243 |   );
+ 244 |   const diffs = generateProofReads(selectedText, curText, from, true);
+ 245 |   view.dispatch(
+ 246 |     setCommand(view.state.tr, {
+ 247 |       type: "replace",
+ 248 |       proofReads: [...itemsBefore, ...diffs],
+ 249 |     })
+ 250 |   );
+ 251 | }
+ 252 | 
+ 253 | // Function to initiate proofreading
+ 254 | export async function proofread(view: EditorView) {
+ 255 |   if (!getAI(view)?.loaded()) {
+ 256 |     return;
+ 257 |   }
+ 258 |   const { state } = view;
+ 259 | 
+ 260 |   if (proofreadingPluginKey.getState(state)?.state === "proofReading") {
+ 261 |     return;
+ 262 |   }
+ 263 | 
+ 264 |   const { selection } = state;
+ 265 |   const { from, to } =
+ 266 |     selection.from !== selection.to
+ 267 |       ? selection
+ 268 |       : {
+ 269 |           from: 0,
+ 270 |           to: view.state.doc.nodeSize - 2,
+ 271 |         };
+ 272 | 
+ 273 |   if (selection.from !== selection.to) {
+ 274 |     const newSelection = TextSelection.create(
+ 275 |       view.state.doc,
+ 276 |       selection.from,
+ 277 |       selection.from
+ 278 |     );
+ 279 |     // Dispatch the new selection
+ 280 |     view.dispatch(view.state.tr.setSelection(newSelection));
+ 281 |   }
+ 282 | 
+ 283 |   const slice = state.doc.slice(from, to);
+ 284 |   const consumer = new BlockConsumer(from - slice.openStart);
+ 285 | 
+ 286 |   const { content } = slice;
+ 287 |   for (let i = 0; i < content.childCount; i++) {
+ 288 |     let child: Node | null = content.child(i);
+ 289 |     visit(child, consumer);
+ 290 |   }
+ 291 | 
+ 292 |   view.dispatch(
+ 293 |     setCommand(view.state.tr, {
+ 294 |       type: "updateState",
+ 295 |       state: "proofReading",
+ 296 |     })
+ 297 |   );
+ 298 | 
+ 299 |   for (const [from, to] of consumer.getTextRanges()) {
+ 300 |     await proofReadBlock(view, from, to);
+ 301 |   }
+ 302 | 
+ 303 |   view.dispatch(
+ 304 |     setCommand(view.state.tr, {
+ 305 |       type: "updateState",
+ 306 |       state: "waiting",
+ 307 |     })
+ 308 |   );
+ 309 | }
+ 310 | 
+ 311 | class BlockConsumer implements DocConsumer {
+ 312 |   #curPos: number;
+ 313 |   #textStartEnd: [number, number][] = [];
+ 314 | 
+ 315 |   constructor(startPos: number) {
+ 316 |     this.#curPos = startPos;
+ 317 |   }
+ 318 | 
+ 319 |   enterNode(node: Node) {
+ 320 |     const isBlock = node.type.isBlock;
+ 321 |     if (isBlock) {
+ 322 |       this.#curPos += 1;
+ 323 |     }
+ 324 |   }
+ 325 | 
+ 326 |   exitNode(node: Node) {
+ 327 |     if (node.type.isBlock) {
+ 328 |       this.#curPos += 1;
+ 329 |     } else if (node.type.isText) {
+ 330 |       const nextPos = this.#curPos + node.nodeSize;
+ 331 |       this.#textStartEnd.push([this.#curPos, nextPos]);
+ 332 |       this.#curPos = nextPos;
+ 333 |     } else {
+ 334 |       this.#curPos += node.nodeSize;
+ 335 |     }
+ 336 |   }
+ 337 | 
+ 338 |   getTextRanges() {
+ 339 |     return this.#textStartEnd;
+ 340 |   }
+ 341 | }
+ 342 | 
+ 343 | function createDiffsDecorations(doc: Node, diffs: ProofRead[]) {
+ 344 |   let offset = 0;
+ 345 |   return diffs.map((diff) => {
+ 346 |     if (diff.from === diff.to) {
+ 347 |       return Decoration.widget(diff.from + offset, createInsertionWidget(diff));
+ 348 |     } else if (diff.diff === "") {
+ 349 |       return Decoration.inline(diff.from + offset, diff.to + offset, {
+ 350 |         class: styles.deleteStyle,
+ 351 |         "data-pf-diff": JSON.stringify(diff),
+ 352 |       });
+ 353 |     } else {
+ 354 |       // replacement
+ 355 |       return Decoration.inline(diff.from + offset, diff.to + offset, {
+ 356 |         class: styles.diffStyle,
+ 357 |         "data-pf-diff": JSON.stringify(diff),
+ 358 |       });
+ 359 |     }
+ 360 |   });
+ 361 | }
+ 362 | 
+ 363 | function createInsertionWidget(diff: ProofRead) {
+ 364 |   const span = document.createElement("span");
+ 365 |   span.className = styles.insertStyle;
+ 366 |   span.textContent = diff.diff;
+ 367 |   span.setAttribute("data-pf-diff", JSON.stringify(diff));
+ 368 |   return span;
+ 369 | }
+ 370 | 
+ 371 | function generateProofReads(
+ 372 |   oldStr: string,
+ 373 |   newStr: string,
+ 374 |   baseOffset: number,
+ 375 |   hasFinished: boolean
+ 376 | ): ProofRead[] {
+ 377 |   const dmp = new DiffMatchPatch();
+ 378 |   const diffs = dmp.diff_main(oldStr, newStr);
+ 379 |   dmp.diff_cleanupSemantic(diffs);
+ 380 | 
+ 381 |   const proofReads: ProofRead[] = [];
+ 382 |   let offset = 0;
+ 383 |   let currentProofRead: ProofRead | null = null;
+ 384 | 
+ 385 |   for (const [op, text] of diffs) {
+ 386 |     if (op === 0) {
+ 387 |       // No change
+ 388 |       if (currentProofRead) {
+ 389 |         proofReads.push(currentProofRead);
+ 390 |         currentProofRead = null;
+ 391 |       }
+ 392 |       offset += text.length;
+ 393 |     } else if (op === -1) {
+ 394 |       // Deletion
+ 395 |       if (!currentProofRead) {
+ 396 |         currentProofRead = {
+ 397 |           from: baseOffset + offset,
+ 398 |           to: baseOffset + offset + text.length,
+ 399 |           diff: "",
+ 400 |         };
+ 401 |       } else {
+ 402 |         currentProofRead.to += text.length;
+ 403 |       }
+ 404 |       offset += text.length;
+ 405 |     } else if (op === 1) {
+ 406 |       // Insertion
+ 407 |       if (!currentProofRead) {
+ 408 |         currentProofRead = {
+ 409 |           from: baseOffset + offset,
+ 410 |           to: baseOffset + offset,
+ 411 |           diff: text,
+ 412 |         };
+ 413 |       } else {
+ 414 |         currentProofRead.diff += text;
+ 415 |       }
+ 416 |     }
+ 417 |   }
+ 418 | 
+ 419 |   if (currentProofRead) {
+ 420 |     proofReads.push(currentProofRead);
+ 421 |   }
+ 422 | 
+ 423 |   if (!hasFinished) {
+ 424 |     proofReads.pop();
+ 425 |   }
+ 426 | 
+ 427 |   return proofReads;
+ 428 | }
+ 429 | 
+ 430 | // Function to apply a suggestion
+ 431 | export function applySuggestion(view: EditorView, diff: ProofRead) {
+ 432 |   let tr = setCommand(view.state.tr, {
+ 433 |     type: "delete",
+ 434 |     proofRead: diff,
+ 435 |   });
+ 436 |   if (diff.diff) {
+ 437 |     tr = tr.replaceWith(diff.from, diff.to, view.state.schema.text(diff.diff));
+ 438 |   } else {
+ 439 |     tr = tr.deleteRange(diff.from, diff.to);
+ 440 |   }
+ 441 |   view.dispatch(tr);
+ 442 | }
+ 443 | 
+ 444 | // Function to apply a suggestion
+ 445 | export function rejectSuggestion(view: EditorView, diff: ProofRead) {
+ 446 |   const tr = setCommand(view.state.tr, {
+ 447 |     type: "delete",
+ 448 |     proofRead: diff,
+ 449 |   });
+ 450 |   view.dispatch(tr);
+ 451 | }
+ 452 | 
+ 453 | export function activateProofReadItem(view: EditorView, diff: ProofRead) {
+ 454 |   const tr = setCommand(view.state.tr, {
+ 455 |     type: "activate",
+ 456 |     proofRead: diff,
+ 457 |   });
+ 458 |   view.dispatch(tr);
+ 459 | }
+ 460 | 
+ 461 | export function resetProofRead(view: EditorView) {
+ 462 |   const tr = setCommand(view.state.tr, {
+ 463 |     type: "reset",
+ 464 |   });
+ 465 |   view.dispatch(tr);
+ 466 | }
+ 467 | 
+ 468 | export function getProofReadDerivedState(state: EditorState) {
+ 469 |   const pluginState = proofreadingPluginKey.getState(state);
+ 470 |   return {
+ 471 |     activeProofRead: pluginState?.activeProofRead,
+ 472 |     state: pluginState?.state ?? "idle",
+ 473 |   };
+ 474 | }
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/components/ProseMIrror/smartExpansionPlugin.ts`:
+
+```ts
+   1 | import { getAI } from "@/app/api/ai/viewAI";
+   2 | import { Plugin, PluginKey, EditorState, Transaction } from "prosemirror-state";
+   3 | import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
+   4 | import styles from "./../TextEditorWrapper.module.css";
+   5 | 
+   6 | export type SmartExpansionState =
+   7 |   | {
+   8 |       type: "generating";
+   9 |       from: number;
+  10 |       to: number;
+  11 |       generatedText: string;
+  12 |       generateType: "rewrite" | "expand";
+  13 |     }
+  14 |   | {
+  15 |       type: "hintGenerating";
+  16 |       from: number;
+  17 |       to: number;
+  18 |       generateType: "rewrite" | "expand";
+  19 |     }
+  20 |   | {
+  21 |       type: "idle";
+  22 |     };
+  23 | 
+  24 | type SmartExpansionCommand =
+  25 |   | {
+  26 |       type: "startGenerating";
+  27 |       from: number;
+  28 |       to: number;
+  29 |       generateType: "rewrite" | "expand";
+  30 |     }
+  31 |   | {
+  32 |       type: "updateGenerating";
+  33 |       text: string;
+  34 |     }
+  35 |   | {
+  36 |       type: "reset";
+  37 |     }
+  38 |   | {
+  39 |       type: "hintGenerating";
+  40 |       from: number;
+  41 |       to: number;
+  42 |       generateType: "rewrite" | "expand";
+  43 |     };
+  44 | 
+  45 | function getCommand(tr: Transaction): SmartExpansionCommand | undefined {
+  46 |   return tr.getMeta(smartExpansionKey);
+  47 | }
+  48 | 
+  49 | function setCommand(tr: Transaction, command: SmartExpansionCommand) {
+  50 |   return tr.setMeta(smartExpansionKey, command);
+  51 | }
+  52 | 
+  53 | export const smartExpansionKey = new PluginKey<SmartExpansionState>(
+  54 |   "smartExpansion"
+  55 | );
+  56 | 
+  57 | export const SmartExpansionPlugin = new Plugin<SmartExpansionState>({
+  58 |   key: smartExpansionKey,
+  59 |   state: {
+  60 |     init(): SmartExpansionState {
+  61 |       return { type: "idle" };
+  62 |     },
+  63 |     apply(tr: Transaction, state: SmartExpansionState): SmartExpansionState {
+  64 |       const meta = getCommand(tr);
+  65 |       if (!meta) {
+  66 |         return state;
+  67 |       }
+  68 |       switch (meta.type) {
+  69 |         case "startGenerating":
+  70 |           return {
+  71 |             type: "generating",
+  72 |             from: meta.from,
+  73 |             to: meta.to,
+  74 |             generatedText: "",
+  75 |             generateType: meta.generateType,
+  76 |           };
+  77 |         case "updateGenerating":
+  78 |           if (state.type === "generating") {
+  79 |             return { ...state, generatedText: meta.text };
+  80 |           }
+  81 |           return state;
+  82 |         case "reset":
+  83 |           return { type: "idle" };
+  84 |         case "hintGenerating":
+  85 |           return {
+  86 |             type: "hintGenerating",
+  87 |             from: meta.from,
+  88 |             to: meta.to,
+  89 |             generateType: meta.generateType,
+  90 |           };
+  91 |       }
+  92 |     },
+  93 |   },
+  94 |   view(editorView) {
+  95 |     return {
+  96 |       update(view, prevState) {
+  97 |         const currentSelection = view.state.selection;
+  98 |         const previousSelection = prevState.selection;
+  99 | 
+ 100 |         if (currentSelection.eq(previousSelection)) {
+ 101 |           return;
+ 102 |         }
+ 103 |         const pluginState = smartExpansionKey.getState(view.state);
+ 104 |         if (pluginState?.type === "hintGenerating") {
+ 105 |           if (
+ 106 |             currentSelection.from !== currentSelection.to ||
+ 107 |             currentSelection.from !== pluginState.to
+ 108 |           ) {
+ 109 |             view.dispatch(
+ 110 |               setCommand(view.state.tr, {
+ 111 |                 type: "reset",
+ 112 |               })
+ 113 |             );
+ 114 |           }
+ 115 |         } else if (pluginState?.type === "idle") {
+ 116 |           run(view, currentSelection.to);
+ 117 |         }
+ 118 |       },
+ 119 |     };
+ 120 |   },
+ 121 |   props: {
+ 122 |     handleKeyDown(view, event) {
+ 123 |       if (event.key === "Tab" && getAI(view)?.loaded) {
+ 124 |         const pluginState = smartExpansionKey.getState(view.state);
+ 125 |         if (pluginState?.type === "hintGenerating") {
+ 126 |           if (pluginState.generateType === "expand") {
+ 127 |             applyExpansion(view, pluginState.from, pluginState.to);
+ 128 |           } else {
+ 129 |             applyRewrite(view, pluginState.from, pluginState.to);
+ 130 |           }
+ 131 |           return true;
+ 132 |         }
+ 133 |       }
+ 134 |     },
+ 135 |     decorations(state: EditorState): DecorationSet | undefined {
+ 136 |       const pluginState = this.getState(state);
+ 137 |       if (!pluginState) {
+ 138 |         return;
+ 139 |       }
+ 140 |       switch (pluginState.type) {
+ 141 |         case "generating":
+ 142 |           return DecorationSet.create(state.doc, [
+ 143 |             Decoration.inline(pluginState.from, pluginState.to, {
+ 144 |               class: styles.expandingLoading,
+ 145 |             }),
+ 146 |           ]);
+ 147 |         case "hintGenerating":
+ 148 |           return DecorationSet.create(state.doc, [
+ 149 |             Decoration.inline(pluginState.from, pluginState.to, {
+ 150 |               class: styles.expandingLoading,
+ 151 |             }),
+ 152 |           ]);
+ 153 |         case "idle":
+ 154 |           return undefined;
+ 155 |         default:
+ 156 |           const _: never = pluginState;
+ 157 |       }
+ 158 |     },
+ 159 |   },
+ 160 | });
+ 161 | 
+ 162 | const MAX_MATCH = 2000;
+ 163 | 
+ 164 | function run(view: EditorView, to: number) {
+ 165 |   if (view.composing) return false;
+ 166 |   let state = view.state,
+ 167 |     $to = state.doc.resolve(to);
+ 168 |   let textBefore = $to.parent.textBetween(
+ 169 |     Math.max(0, $to.parentOffset - MAX_MATCH),
+ 170 |     $to.parentOffset,
+ 171 |     null,
+ 172 |     "\ufffc"
+ 173 |   );
+ 174 |   const match = textBefore.match(/(<[^>]+>$)/);
+ 175 |   if (match) {
+ 176 |     view.dispatch(
+ 177 |       setCommand(view.state.tr, {
+ 178 |         type: "hintGenerating",
+ 179 |         from: to - match[1].length,
+ 180 |         to: to,
+ 181 |         generateType: "expand",
+ 182 |       })
+ 183 |     );
+ 184 |     return;
+ 185 |   }
+ 186 |   const matchRewrite = textBefore.match(/(\[[^\]]+\]$)/);
+ 187 |   if (matchRewrite) {
+ 188 |     view.dispatch(
+ 189 |       setCommand(view.state.tr, {
+ 190 |         type: "hintGenerating",
+ 191 |         from: to - matchRewrite[1].length,
+ 192 |         to: to,
+ 193 |         generateType: "rewrite",
+ 194 |       })
+ 195 |     );
+ 196 |     return;
+ 197 |   }
+ 198 |   if (smartExpansionKey.getState(view.state)?.type === "hintGenerating") {
+ 199 |     view.dispatch(
+ 200 |       setCommand(view.state.tr, {
+ 201 |         type: "reset",
+ 202 |       })
+ 203 |     );
+ 204 |   }
+ 205 | }
+ 206 | 
+ 207 | export function applyExpansion(view: EditorView, from: number, to: number) {
+ 208 |   if (from === to) return false; // No selection
+ 209 | 
+ 210 |   const selectedText = view.state.doc
+ 211 |     .textBetween(from, to)
+ 212 |     .replace(/(^<)|(>$)/g, "");
+ 213 | 
+ 214 |   view.dispatch(
+ 215 |     setCommand(view.state.tr, {
+ 216 |       type: "startGenerating",
+ 217 |       from,
+ 218 |       to,
+ 219 |       generateType: "expand",
+ 220 |     })
+ 221 |   );
+ 222 | 
+ 223 |   const prefix = view.state.doc.textBetween(0, from);
+ 224 | 
+ 225 |   // Call AI endpoint
+ 226 |   fetchAiExpansion(view, prefix, selectedText)
+ 227 |     .then((expandedText) => {
+ 228 |       const newTr = setCommand(
+ 229 |         view.state.tr.replaceWith(
+ 230 |           from,
+ 231 |           to,
+ 232 |           view.state.schema.text(expandedText)
+ 233 |         ),
+ 234 |         {
+ 235 |           type: "reset",
+ 236 |         }
+ 237 |       );
+ 238 |       view.dispatch(newTr);
+ 239 |     })
+ 240 |     .catch((error) => {
+ 241 |       console.error("Error expanding text:", error);
+ 242 |       // Reset plugin state on error
+ 243 |       const errorTr = setCommand(view.state.tr, {
+ 244 |         type: "reset",
+ 245 |       });
+ 246 |       view.dispatch(errorTr);
+ 247 |     });
+ 248 | }
+ 249 | 
+ 250 | export function applyRewrite(view: EditorView, from: number, to: number) {
+ 251 |   if (from === to) return false; // No selection
+ 252 | 
+ 253 |   const selectedText = view.state.doc
+ 254 |     .textBetween(from, to)
+ 255 |     .replace(/(^\[)|(\]$)/g, "");
+ 256 | 
+ 257 |   view.dispatch(
+ 258 |     setCommand(view.state.tr, {
+ 259 |       type: "startGenerating",
+ 260 |       from,
+ 261 |       to,
+ 262 |       generateType: "rewrite",
+ 263 |     })
+ 264 |   );
+ 265 | 
+ 266 |   const prefix = view.state.doc.textBetween(0, from);
+ 267 | 
+ 268 |   // Call AI endpoint
+ 269 |   fetchAiRewrite(view, prefix, selectedText)
+ 270 |     .then((expandedText) => {
+ 271 |       const newTr = setCommand(
+ 272 |         view.state.tr.replaceWith(
+ 273 |           from,
+ 274 |           to,
+ 275 |           view.state.schema.text(expandedText)
+ 276 |         ),
+ 277 |         {
+ 278 |           type: "reset",
+ 279 |         }
+ 280 |       );
+ 281 |       view.dispatch(newTr);
+ 282 |     })
+ 283 |     .catch((error) => {
+ 284 |       console.error("Error expanding text:", error);
+ 285 |       // Reset plugin state on error
+ 286 |       const errorTr = setCommand(view.state.tr, {
+ 287 |         type: "reset",
+ 288 |       });
+ 289 |       view.dispatch(errorTr);
+ 290 |     });
+ 291 | }
+ 292 | 
+ 293 | async function fetchAiExpansion(
+ 294 |   view: EditorView,
+ 295 |   prefix: string,
+ 296 |   text: string
+ 297 | ): Promise<string> {
+ 298 |   console.log(text);
+ 299 |   let generatedText = "";
+ 300 |   await getAI(view)?.request(
+ 301 |     {
+ 302 |       stream: true,
+ 303 |       messages: [
+ 304 |         {
+ 305 |           role: "system",
+ 306 |           content: `You are a writing assistant. You respond to the user's request by expanding what they say, following the style and context from the text before. ONLY output the expanded result without anything else before or after. Do NOT include the text before.
+ 307 | When expanding, follow the style and tone of the following text:
+ 308 | ${prefix || "No text before."}`,
+ 309 |         },
+ 310 |         {
+ 311 |           role: "user",
+ 312 |           content: `${text}`,
+ 313 |         },
+ 314 |       ],
+ 315 |       temperature: 0.1,
+ 316 |     },
+ 317 |     (chunk) => {
+ 318 |       // Update the generated text
+ 319 |       generatedText = chunk;
+ 320 | 
+ 321 |       // Update the plugin state with the current generated text
+ 322 |       const tr = setCommand(view.state.tr, {
+ 323 |         type: "updateGenerating",
+ 324 |         text: generatedText,
+ 325 |       });
+ 326 |       view.dispatch(tr);
+ 327 |     }
+ 328 |   );
+ 329 |   return generatedText;
+ 330 | }
+ 331 | 
+ 332 | async function fetchAiRewrite(
+ 333 |   view: EditorView,
+ 334 |   prefix: string,
+ 335 |   text: string
+ 336 | ): Promise<string> {
+ 337 |   let generatedText = "";
+ 338 |   await getAI(view)?.request(
+ 339 |     {
+ 340 |       stream: true,
+ 341 |       messages: [
+ 342 |         {
+ 343 |           role: "system",
+ 344 |           content: `You are a writing assistant. You respond to the user's request by rewriting what they say to improve coherence and readability.
+ 345 | 1. The result should have the same style, tone and length as before.
+ 346 | 2. Directly output the rewritten text ONLY without anything else before or after.
+ 347 | 3. Do not include the text before, only the rewritten text.
+ 348 | `,
+ 349 |         },
+ 350 |         {
+ 351 |           role: "user",
+ 352 |           content: "rewrite this: Hey, thinking about a new hobby. Painting or gardening. Sounds relaxing, could be fun. What do you think?"
+ 353 |         },
+ 354 |         {
+ 355 |           role: "assistant",
+ 356 |           content: "Hey, I've been considering starting a new hobby, like painting or gardening. It sounds super relaxing, and I think it could be a lot of fun. What do you think?",
+ 357 |         },
+ 358 |         {
+ 359 |           role: "user",
+ 360 |           content: "rewrite this: Dear team, we got the new client. Big deal for us. Thanks for all the hard work. Let's keep it up."
+ 361 |         },
+ 362 |         {
+ 363 |           role: "assistant",
+ 364 |           content: "Dear team, I'm pleased to announce that we have successfully secured the new client. This is a major milestone for our company, and I want to thank everyone for their hard work in achieving this. Let's keep aiming for excellence in our upcoming projects."
+ 365 |         },
+ 366 |         {
+ 367 |           role: "user",
+ 368 |           content: `rewrite this: ${text}`,
+ 369 |         },
+ 370 |       ],
+ 371 |       temperature: 0,
+ 372 |     },
+ 373 |     (chunk) => {
+ 374 |       // Update the generated text
+ 375 |       generatedText = chunk;
+ 376 | 
+ 377 |       // Update the plugin state with the current generated text
+ 378 |       const tr = setCommand(view.state.tr, {
+ 379 |         type: "updateGenerating",
+ 380 |         text: generatedText,
+ 381 |       });
+ 382 |       view.dispatch(tr);
+ 383 |     }
+ 384 |   );
+ 385 |   return generatedText;
+ 386 | }
+ 387 | 
+ 388 | // Helper function to get the current state of the plugin
+ 389 | export function getSmartExpansionState(
+ 390 |   state: EditorState
+ 391 | ): SmartExpansionState {
+ 392 |   return (
+ 393 |     smartExpansionKey.getState(state) || {
+ 394 |       type: "idle",
+ 395 |     }
+ 396 |   );
+ 397 | }
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/components/ProseMIrror/actionsPlugin.ts`:
+
+```ts
+   1 | import { Plugin, PluginKey } from "prosemirror-state";
+   2 | import { Decoration, DecorationSet } from "prosemirror-view";
+   3 | 
+   4 | const pluginKey = new PluginKey("actions");
+   5 | 
+   6 | type PluginState = {
+   7 |   pos: number | undefined;
+   8 | };
+   9 | 
+  10 | export const actionsPlugin = new Plugin<PluginState>({
+  11 |   key: pluginKey,
+  12 |   state: {
+  13 |     init() {
+  14 |       return { pos: undefined };
+  15 |     },
+  16 |     apply(tr, value, oldState, newState) {
+  17 |       const action = tr.getMeta(pluginKey);
+  18 |       if (action && action.type === "SHOW_DROPDOWN") {
+  19 |         return { pos: action.pos };
+  20 |       } else if (action && action.type === "HIDE_DROPDOWN") {
+  21 |         return { pos: undefined };
+  22 |       }
+  23 |       return value;
+  24 |     },
+  25 |   },
+  26 |   props: {
+  27 |     handleKeyDown(view, event) {
+  28 |       if (event.key === "/") {
+  29 |         const { $from } = view.state.selection;
+  30 |         const pos = $from.pos + 1;
+  31 |         view.dispatch(
+  32 |           view.state.tr.setMeta(this, { type: "SHOW_DROPDOWN", pos })
+  33 |         );
+  34 |       }
+  35 |       return false;
+  36 |     },
+  37 |   },
+  38 |   view(editorView) {
+  39 |     return {
+  40 |       update(view, prevState) {
+  41 |         if (view.state.selection == prevState.selection) {
+  42 |           return;
+  43 |         }
+  44 |         const { pos } = actionsPlugin.getState(view.state) ?? {};
+  45 |         if (pos !== undefined) {
+  46 |           const { from } = view.state.selection;
+  47 |           if (from !== pos) {
+  48 |             view.dispatch(
+  49 |               view.state.tr.setMeta(pluginKey, { type: "HIDE_DROPDOWN" })
+  50 |             );
+  51 |           }
+  52 |         }
+  53 |       },
+  54 |     };
+  55 |   },
+  56 | });
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/components/ProseMIrror/autoCompletePlugin.ts`:
+
+```ts
+   1 | import {
+   2 |   EditorState,
+   3 |   Plugin,
+   4 |   PluginKey,
+   5 |   TextSelection,
+   6 |   Transaction,
+   7 | } from "prosemirror-state";
+   8 | import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
+   9 | import { textSchema } from "./schema";
+  10 | import { Mapping } from "prosemirror-transform";
+  11 | import { getAI } from "@/app/api/ai/viewAI";
+  12 | 
+  13 | const pluginKey = new PluginKey("autoComplete");
+  14 | 
+  15 | let id = 0;
+  16 | 
+  17 | function makeId(): number {
+  18 |   return id++;
+  19 | }
+  20 | 
+  21 | type ProgressingAutoComplete = {
+  22 |   type: "progressing" | "waiting";
+  23 |   id: number;
+  24 |   pos: number;
+  25 |   content: string;
+  26 |   abort: () => void;
+  27 | };
+  28 | 
+  29 | type AutoCompleteState =
+  30 |   | ProgressingAutoComplete
+  31 |   | {
+  32 |       type: "starting";
+  33 |       id: number;
+  34 |       pos: number;
+  35 |     };
+  36 | 
+  37 | type PluginState = {
+  38 |   autoComplete: AutoCompleteState | undefined;
+  39 | };
+  40 | 
+  41 | export async function performAutoComplete(view: EditorView) {
+  42 |   const { autoComplete } = autoCompletePlugin.getState(view.state) ?? {};
+  43 | 
+  44 |   if (autoComplete) {
+  45 |     return;
+  46 |   }
+  47 |   const currentSelection = view.state.selection;
+  48 |   const { $head } = currentSelection;
+  49 |   const id = makeId();
+  50 |   view.dispatch(startAutoComplete(view.state, id, $head.pos));
+  51 |   const prefix = view.state.doc.textBetween(0, $head.pos);
+  52 |   let curText = "";
+  53 |   // await getAI(view)?.completion(
+  54 |   //   `Continue writing the given text:\n${prefix}`,
+  55 |   //   (text, abort) => {
+  56 |   //     curText = text;
+  57 |   //     if (autoCompletePlugin.getState(view.state)?.autoComplete?.id === id) {
+  58 |   //       view.dispatch(
+  59 |   //         createOrUpdateAutoComplete(
+  60 |   //           view.state,
+  61 |   //           {
+  62 |   //             type: "progressing",
+  63 |   //             id,
+  64 |   //             pos: $head.pos,
+  65 |   //             content: text,
+  66 |   //             abort,
+  67 |   //           },
+  68 |   //           autoCompletePlugin.getState(view.state)?.autoComplete
+  69 |   //         )
+  70 |   //       );
+  71 |   //     }
+  72 |   //   }
+  73 |   // );
+  74 | 
+  75 |   await getAI(view)?.request({
+  76 |       messages: [
+  77 |         {
+  78 |           role: "user",
+  79 |           content: `Help me finish this text, only respond with the continuation without the prompt or anything else before or after, add space at the beginning if needed: ${prefix}`,
+  80 |         },
+  81 |       ],
+  82 |       temperature: 0.2,
+  83 |     },
+  84 |     (text, abort) => {
+  85 |       const { state } = view;
+  86 | 
+  87 |       curText = text;
+  88 |       // Update the plugin state with the proofreading results
+  89 |       view.dispatch(
+  90 |         createOrUpdateAutoComplete(
+  91 |           view.state,
+  92 |           {
+  93 |             type: "progressing",
+  94 |             id,
+  95 |             pos: $head.pos,
+  96 |             content: text,
+  97 |             abort,
+  98 |           },
+  99 |           autoCompletePlugin.getState(view.state)?.autoComplete
+ 100 |         )
+ 101 |       );
+ 102 |     }
+ 103 |   );
+ 104 | 
+ 105 |   view.dispatch(
+ 106 |     createOrUpdateAutoComplete(
+ 107 |       view.state,
+ 108 |       {
+ 109 |         type: "waiting",
+ 110 |         id,
+ 111 |         pos: $head.pos,
+ 112 |         content: curText,
+ 113 |         abort: () => {},
+ 114 |       },
+ 115 |       autoCompletePlugin.getState(view.state)?.autoComplete
+ 116 |     )
+ 117 |   );
+ 118 | }
+ 119 | 
+ 120 | export const autoCompletePlugin = new Plugin<PluginState>({
+ 121 |   key: pluginKey,
+ 122 |   state: {
+ 123 |     init() {
+ 124 |       return { autoComplete: undefined };
+ 125 |     },
+ 126 |     apply(tr, value, oldState, newState): PluginState {
+ 127 |       const oldAutoComplete = autoCompletePlugin.getState(oldState) ?? {
+ 128 |         autoComplete: undefined,
+ 129 |       };
+ 130 |       const action = tr.getMeta(pluginKey);
+ 131 |       if (!action) {
+ 132 |         if (oldAutoComplete.autoComplete) {
+ 133 |           const mapping = new Mapping(tr.mapping.maps);
+ 134 |           // Map the position through the transaction
+ 135 |           const newPos = mapping.map(oldAutoComplete.autoComplete.pos);
+ 136 | 
+ 137 |           return {
+ 138 |             autoComplete: {
+ 139 |               ...oldAutoComplete.autoComplete,
+ 140 |               pos: newPos,
+ 141 |             },
+ 142 |           };
+ 143 |         }
+ 144 |         return oldAutoComplete;
+ 145 |       } else {
+ 146 |         if (action.type === "ADD_AUTO_COMPLETE") {
+ 147 |           return {
+ 148 |             autoComplete: action.autoComplete,
+ 149 |           };
+ 150 |         } else if (action.type === "REMOVE_AUTO_COMPLETE") {
+ 151 |           if (oldAutoComplete.autoComplete?.type === "progressing") {
+ 152 |             oldAutoComplete.autoComplete?.abort();
+ 153 |           }
+ 154 |           return { autoComplete: undefined };
+ 155 |         }
+ 156 |         return value;
+ 157 |       }
+ 158 |     },
+ 159 |   },
+ 160 |   props: {
+ 161 |     handleKeyDown(view, event) {
+ 162 |       if (event.key == "Tab") {
+ 163 |         return acceptAutoComplete(view);
+ 164 |       } else if (event.key == "." && event.metaKey) {
+ 165 |         performAutoComplete(view);
+ 166 |       }
+ 167 |     },
+ 168 |   },
+ 169 |   view(editorView) {
+ 170 |     return {
+ 171 |       update(view, prevState) {
+ 172 |         const currentSelection = view.state.selection;
+ 173 |         const previousSelection = prevState.selection;
+ 174 | 
+ 175 |         const { autoComplete } = autoCompletePlugin.getState(view.state) ?? {};
+ 176 | 
+ 177 |         if (!currentSelection.eq(previousSelection)) {
+ 178 |           if (autoComplete) {
+ 179 |             view.dispatch(removeAutoComplete(view.state, autoComplete));
+ 180 |           }
+ 181 |         }
+ 182 |       },
+ 183 |     };
+ 184 |   },
+ 185 | });
+ 186 | 
+ 187 | function removeAutoComplete(
+ 188 |   state: EditorState,
+ 189 |   autoComplete: AutoCompleteState
+ 190 | ): Transaction {
+ 191 |   let tr = state.tr;
+ 192 |   if (autoComplete.type === "progressing" || autoComplete.type === "waiting") {
+ 193 |     tr = tr.deleteRange(
+ 194 |       autoComplete.pos,
+ 195 |       autoComplete.pos + autoComplete.content.length
+ 196 |     );
+ 197 |   }
+ 198 |   return tr.setMeta(autoCompletePlugin, {
+ 199 |     type: "REMOVE_AUTO_COMPLETE",
+ 200 |   });
+ 201 | }
+ 202 | 
+ 203 | function startAutoComplete(
+ 204 |   state: EditorState,
+ 205 |   id: number,
+ 206 |   pos: number
+ 207 | ): Transaction {
+ 208 |   let tr = state.tr;
+ 209 |   return tr.setMeta(autoCompletePlugin, {
+ 210 |     type: "ADD_AUTO_COMPLETE",
+ 211 |     autoComplete: {
+ 212 |       id,
+ 213 |       pos,
+ 214 |       type: "starting",
+ 215 |     },
+ 216 |   });
+ 217 | }
+ 218 | 
+ 219 | function createOrUpdateAutoComplete(
+ 220 |   state: EditorState,
+ 221 |   autoComplete: ProgressingAutoComplete,
+ 222 |   oldAutoComplete: AutoCompleteState | undefined
+ 223 | ): Transaction {
+ 224 |   let tr = state.tr;
+ 225 |   if (oldAutoComplete && oldAutoComplete.type === "progressing") {
+ 226 |     tr = tr.delete(
+ 227 |       oldAutoComplete.pos,
+ 228 |       oldAutoComplete.pos + oldAutoComplete.content.length
+ 229 |     );
+ 230 |   }
+ 231 |   tr = tr.insert(
+ 232 |     autoComplete.pos,
+ 233 |     textSchema.text(autoComplete.content, [
+ 234 |       textSchema.marks.autoComplete.create(),
+ 235 |     ])
+ 236 |   );
+ 237 |   return tr
+ 238 |     .setSelection(TextSelection.create(tr.doc, autoComplete.pos))
+ 239 |     .setMeta(autoCompletePlugin, {
+ 240 |       type: "ADD_AUTO_COMPLETE",
+ 241 |       autoComplete: autoComplete,
+ 242 |     });
+ 243 | }
+ 244 | 
+ 245 | export function acceptAutoComplete(view: EditorView) {
+ 246 |   const { autoComplete } = autoCompletePlugin.getState(view.state) ?? {};
+ 247 |   if (!autoComplete || autoComplete.type === "starting") {
+ 248 |     return false;
+ 249 |   }
+ 250 |   view.dispatch(applyAutoComplete(view.state, autoComplete));
+ 251 |   return true;
+ 252 | }
+ 253 | 
+ 254 | function applyAutoComplete(
+ 255 |   state: EditorState,
+ 256 |   autoComplete: ProgressingAutoComplete
+ 257 | ): Transaction {
+ 258 |   const tr = state.tr
+ 259 |     .setMeta(autoCompletePlugin, {
+ 260 |       type: "REMOVE_AUTO_COMPLETE",
+ 261 |     })
+ 262 |     .removeMark(
+ 263 |       autoComplete.pos,
+ 264 |       autoComplete.pos + autoComplete.content.length,
+ 265 |       textSchema.marks.autoComplete
+ 266 |     );
+ 267 |   return tr.setSelection(
+ 268 |     TextSelection.create(tr.doc, autoComplete.pos + autoComplete.content.length)
+ 269 |   );
+ 270 | }
+ 271 | 
+ 272 | export function getAutoCompleteDerivedState(state: EditorState): {
+ 273 |   state: "idle" | "waiting" | "autoCompleting";
+ 274 | } {
+ 275 |   const pluginState = autoCompletePlugin.getState(state);
+ 276 |   const autoComplete = pluginState?.autoComplete;
+ 277 |   return {
+ 278 |     state:
+ 279 |       autoComplete?.type === "progressing" || autoComplete?.type === "starting"
+ 280 |         ? "autoCompleting"
+ 281 |         : autoComplete
+ 282 |         ? "waiting"
+ 283 |         : "idle",
+ 284 |   };
+ 285 | }
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/components/ProseMIrror/DocVisitor.ts`:
+
+```ts
+   1 | import { Node } from "prosemirror-model";
+   2 | 
+   3 | export interface DocConsumer {
+   4 |   enterNode(node: Node): void;
+   5 |   exitNode(node: Node): void;
+   6 | }
+   7 | 
+   8 | export function visit(node: Node, consumer: DocConsumer) {
+   9 |   consumer.enterNode(node);
+  10 |   for (let i = 0; i < node.childCount; i++) {
+  11 |     const child = node.child(i);
+  12 |     visit(child, consumer);
+  13 |   }
+  14 |   consumer.exitNode(node);
+  15 | }
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/combini/Main.module.css.d.ts`:
+
+```ts
+   1 | declare const styles: {
+   2 |   readonly container: string;
+   3 |   readonly sidebar: string;
+   4 |   readonly mainArea: string;
+   5 |   readonly poweredBy: string;
+   6 |   readonly progressBar: string;
+   7 |   readonly content: string;
+   8 |   readonly toolbar: string;
+   9 |   readonly editor: string;
+  10 |   readonly footer: string;
+  11 | };
+  12 | 
+  13 | export default styles;
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/api/ai/viewAI.ts`:
+
+```ts
+   1 | import { EditorView } from "prosemirror-view";
+   2 | import { AI } from "./ai";
+   3 | 
+   4 | const map = new WeakMap<EditorView, AI>();
+   5 | 
+   6 | export function getAI(view: EditorView) {
+   7 |   return map.get(view);
+   8 | }
+   9 | 
+  10 | export function setAI(view: EditorView, ai: AI) {
+  11 |   map.set(view, ai);
+  12 | }
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/app/api/ai/ai.ts`:
+
+```ts
+   1 | import { completion } from "litellm";
+   2 | 
+   3 | process.env.OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
+   4 | 
+   5 | 
+   6 | export class AI {
+   7 |   #loaded = false;
+   8 | 
+   9 |   loaded() {
+  10 |     return this.#loaded;
+  11 |   }
+  12 | 
+  13 |   constructor(private readonly initProgressCallback: any) {}
+  14 | 
+  15 |   async load() {
+  16 |     this.#loaded = true;
+  17 |   }
+  18 | 
+  19 |   async completion(
+  20 |     prefix: string,
+  21 |     onUpdate: (v: string, abortFn: () => void) => void
+  22 |   ) {
+  23 |     const abortFn = () => {};
+  24 |     onUpdate("Direct completion is not used in this chat demo.", abortFn);
+  25 |     return "Direct completion is not used in this chat demo.";
+  26 |   }
+  27 |   async request(
+  28 |     request: {
+  29 |       messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  30 |       temperature?: number;
+  31 |     },
+  32 |     onUpdate: (text: string, abort: () => void) => void
+  33 |   ): Promise<string> {
+  34 |     let shouldAbort = false;
+  35 |     const abortFn = () => {
+  36 |       shouldAbort = true;
+  37 |     };
+  38 | 
+  39 |     try {
+  40 |       const config = {
+  41 |         model: "gpt-4",
+  42 |         messages: request.messages,
+  43 |         stream: true as const,
+  44 |         dangerouslyAllowBrowser: true,
+  45 |         api_key: import.meta.env.VITE_OPENAI_API_KEY
+  46 |       };
+  47 | 
+  48 |       console.log('Environment:', {
+  49 |         hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+  50 |       });
+  51 | 
+  52 |       console.log('Full request config:', config);
+  53 | 
+  54 |       let responseStream;
+  55 |       try {
+  56 |         responseStream = await completion(config);
+  57 |         console.log('Response stream received:', responseStream);
+  58 |       } catch (error) {
+  59 |         console.error('Error during completion:', error);
+  60 |         throw error;
+  61 |       }
+  62 | 
+  63 | 
+  64 |       if (!responseStream) {
+  65 |         throw new Error("Failed to get response stream from Litellm.");
+  66 |       }
+  67 | 
+  68 |       let fullMessage = "";
+  69 |       for await (const chunk of responseStream as any) {
+  70 |         if (shouldAbort) {
+  71 |           return fullMessage;
+  72 |         }
+  73 |         const textChunk = chunk.choices?.[0]?.delta?.content || "";
+  74 |         fullMessage += textChunk;
+  75 |         onUpdate(fullMessage, abortFn);
+  76 |       }
+  77 |       return fullMessage;
+  78 |     } catch (error: any) {
+  79 |       console.error("Litellm API error:", error);
+  80 |       const errorMessage = error.message || "An error occurred while processing your request.";
+  81 |       onUpdate(`Error: ${errorMessage}`, abortFn);
+  82 |       throw new Error(`Litellm API request failed: ${errorMessage}`);
+  83 |     }
+  84 |   }
+  85 | }
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/env.d.ts`:
+
+```ts
+   1 | ~ /// <reference types="vite/client" />
+   2 | 
+   3 | interface ImportMetaEnv {
+   4 |   readonly OPENAI_API_KEY: string
+   5 | }
+   6 | 
+   7 | interface ImportMeta {
+   8 |   readonly env: ImportMetaEnv
+   9 | }
+
+```
+
+`/Users/arthrod/Library/CloudStorage/GoogleDrive-arthursrodrigues@gmail.com/My Drive/acode/atemp-drive/wrait/src/polyfills.ts`:
+
+```ts
+   1 | // Import Node.js modules
+   2 | import { Buffer } from 'buffer';
+   3 | import process from 'process';
+   4 | import { EventEmitter } from 'events';
+   5 | import * as util from 'util';
+   6 | import * as url from 'url';
+   7 | import { Stream } from 'stream';
+   8 | 
+   9 | // Node.js polyfills for browser environment
+  10 | if (typeof window !== 'undefined') {
+  11 |   // Global object
+  12 |   (window as any).global = window;
+  13 |   
+  14 |   // Process
+  15 |   (window as any).process = process;
+  16 |   process.env.OPENAI_API_KEY = import.meta.env.OPENAI_API_KEY;
+  17 |   
+  18 |   // Buffer
+  19 |   (window as any).Buffer = window.Buffer || Buffer;
+  20 |   
+  21 |   // Events
+  22 |   (window as any).EventEmitter = EventEmitter;
+  23 |   
+  24 |   // Util
+  25 |   (window as any).util = util;
+  26 |   
+  27 |   // URL
+  28 |   (window as any).url = url;
+  29 |   
+  30 |   // Stream
+  31 |   (window as any).Stream = Stream;
+  32 | }
+  33 | 
+  34 | // Make this a module
+  35 | export {};
+
+```
