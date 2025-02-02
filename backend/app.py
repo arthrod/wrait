@@ -15,7 +15,7 @@ from quart_cors import cors
 load_dotenv()
 
 app = Quart(__name__)
-app = cors(app, allow_origin=['http://localhost:5174', 'http://127.0.0.1:5174'])
+app = cors(app, allow_origin=['http://localhost:5173', 'http://127.0.0.1:5173'])
 
 # Environment validation
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
