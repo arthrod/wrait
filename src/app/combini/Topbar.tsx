@@ -10,9 +10,13 @@ export interface TopbarProps {
 }
 
 export const Topbar = ({ leftContent, rightContent, className }: TopbarProps) => {
+  const logoSrc = "/cicero-logo.svg"; // Or your logo path
   return (
     <div className={`${styles.topbar} ${className || ""}`}>
-      <div className={styles.leftSection}>{leftContent}</div>
+      <div className={styles.leftSection}>
+        <img src={logoSrc} alt="Cicero Logo" height="30" /> {/* Adjust height as needed */}
+        {leftContent}
+      </div>
       <div className={styles.rightSection}>{rightContent}</div>
     </div>
   );
