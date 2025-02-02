@@ -8,6 +8,7 @@ import { TextEditorWrapper } from "./components/TextEditorWrapper";
 import { Footer } from "./combini/Footer";
 import { Chat, Message } from "./combini/Chat"; // Import Chat Component
 import { v4 as uuidv4 } from 'uuid'; // Import UUID for message IDs
+import { AI } from "./api/ai/ai"; // Import AI class
 
 if (typeof navigator === "undefined") {
   global.navigator = {
@@ -15,6 +16,11 @@ if (typeof navigator === "undefined") {
     platform: "nodejs",
   } as Navigator;
 }
+
+// Initialize AI instance (progress callback is a placeholder)
+const aiInstance = new AI((progress: number) => {
+  console.log(`AI Loading Progress: ${progress}`);
+});
 
 export default function Home() {
   const [loadingProgress, setLoadingProgress] = useState(0);
@@ -47,15 +53,23 @@ export default function Home() {
         setInput(""); // Clear input field
 
         try {
-          // **Backend Call to Litellm will go here**
-          // For now, a placeholder AI response:
-          await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate AI delay
-          const aiResponse: Message = {
+          const aiResponseContent = await new Promise<string>((resolve, reject) => {
+            aiInstance.request(
+              {
+                messages: messages.concat({ role: "user", content: input } as Message), // Send all messages to context
+              },
+              (content, abort) => {
+                resolve(content); // Resolve with the final content from AI stream
+              }
+            ).catch(reject);
+          });
+
+          const aiResponseMessage: Message = {
             id: uuidv4(),
             role: "assistant",
-            content: `Echo: ${input}`, // Replace with actual AI response from litellm
+            content: aiResponseContent,
           };
-          setMessages((prevMessages) => [...prevMessages, aiResponse]); // Add AI response
+          setMessages((prevMessages) => [...prevMessages, aiResponseMessage]); // Add AI response
         } catch (err) {
           console.error("Error during chat:", err);
           // Handle error appropriately (e.g., display error message in chat)
@@ -64,7 +78,7 @@ export default function Home() {
         }
       }
     },
-    [input]
+    [input, messages] // Add messages to dependency array
   );
 
   return (

@@ -14,7 +14,7 @@ export const Topbar = ({ leftContent, rightContent, className }: TopbarProps) =>
   return (
     <div className={`${styles.topbar} ${className || ""}`}>
       <div className={styles.leftSection}>
-        <img src={logoSrc} alt="Cicero Logo" height="30" /> {/* Adjust height as needed */}
+        <img src={logoSrc} alt="Cicero Logo" height="30" style={{ marginRight: '10px' }} /> {/* Adjust height and margin as needed */}
         {leftContent}
       </div>
       <div className={styles.rightSection}>{rightContent}</div>

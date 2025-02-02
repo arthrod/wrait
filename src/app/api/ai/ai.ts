@@ -1,5 +1,7 @@
 import Litellm from "litellm"; // Import litellm
 
+Litellm.api_key = process.env.LITELLM_API_KEY; // Or however you are setting your API key
+
 export class AI {
   //#engine: webllm.MLCEngineInterface | undefined; // Removed webllm engine
 
@@ -12,7 +14,7 @@ export class AI {
   // Removed webllm.InitProgressCallback type
   constructor(
     private readonly initProgressCallback: any
-  ) {}
+  ) { }
 
   async load() {
     /* Removed webllm loading logic
@@ -31,80 +33,47 @@ export class AI {
     prefix: string,
     onUpdate: (v: string, abort: () => void) => void
   ) {
-    /* Removed webllm completion logic
-    const ids = [
-      ...(this.#engine as any).getPipeline().tokenizer.encode(prefix),
-    ];
-    let shouldAbort = false;
-    const abort = () => {
-      shouldAbort = true;
-    };
-    let cur = await this.#engine?.forwardTokensAndSample(ids, false);
-    if (!cur) {
-      this.#engine?.resetChat();
-      return "";
-    }
-    const output: number[] = [cur];
-    for (let i = 0; i < 100; i++) {
-      if (shouldAbort) {
-        this.#engine?.resetChat();
-        return (this.#engine as any).getPipeline().tokenizer.decode(output);
-      }
-      cur = await this.#engine?.forwardTokensAndSample([cur!], false);
-      if (cur) {
-        output.push(cur);
-        const result: string = (this.#engine as any)
-          .getPipeline()
-          .tokenizer.decode(output);
-        onUpdate(result, abort);
-        if (result.endsWith(".")) {
-          break;
-        }
-      } else {
-        break;
-      }
-    }
-
-    this.#engine?.resetChat();
-    */
-    // Placeholder for litellm completion - replace with actual litellm call
-    onUpdate("Litellm completion is not yet implemented in this demo.", abort);
-    return "Litellm completion is not yet implemented in this demo.";
-
+    // Placeholder -  Direct completion is not used in chat, using request instead
+    onUpdate("Direct completion is not used in this chat demo.", abort);
+    return "Direct completion is not used in this chat demo.";
   }
 
+
   async request(
-    request: any, // webllm.ChatCompletionRequestStreaming, // Removed webllm type
+    request: any, // Assuming request has a messages array
     onUpdate: (v: string, abort: () => void) => void
-  ) {
+  ): Promise<any> { // Added Promise<any> and return type
     let shouldAbort = false;
     const abort = () => {
       shouldAbort = true;
     };
-    const asyncChunkGenerator =
-      //await this.#engine?.chat.completions.create(request); // Removed webllm call
-      // Placeholder for litellm chat completion - replace with actual litellm call
-      // Example using OpenAI's gpt-3.5-turbo - adjust model and parameters as needed
-      await Litellm.completion({
-        model: "gpt-3.5-turbo", // Replace with your desired litellm model
-        messages: request.messages, // Assuming request.messages is compatible with litellm
+
+    try {
+      const responseStream = await Litellm.completion({
+        model: "gpt-3.5-turbo", // Or your desired model
+        messages: request.messages,
         stream: true,
-        // Add other litellm parameters as needed (e.g., api_key, etc.)
       });
 
-    if (!asyncChunkGenerator) {
-      return;
-    }
-    let message = "";
-    // Modified to handle litellm stream - adjust based on litellm's streaming response format
-    asyncChunkGenerator.on('data', (chunk) => {
-        const textChunk = chunk.toString(); // Assuming chunk is a Buffer
+      if (!responseStream) {
+        return; // or throw an error
+      }
+
+      let message = "";
+      for await (const chunk of responseStream) {
+        if (shouldAbort) {
+          responseStream.abort();
+          return; // early return if aborted
+        }
+        const textChunk = chunk.choices?.[0]?.delta?.content || "";
         message += textChunk;
         onUpdate(message, abort);
-        if (shouldAbort) {
-          asyncChunkGenerator.abort(); // Adjust abort method if needed for litellm
-        }
-    });
-
+      }
+      return message; // Return the complete message
+    } catch (e) {
+      console.error("Litellm API error:", e);
+      // Consider more specific error handling and reporting to the UI
+      throw e; // Re-throw to be caught by the caller (handleChatSubmit)
+    }
   }
 }

@@ -18,7 +18,9 @@
   line-height: var(--line-height-md);
   font-family: var(--font-family-base);
   color: var(--color-text-primary);
+  word-wrap: break-word; /* or use overflow-wrap: break-word; */
 }
+
 
 .user {
   align-self: flex-end;
