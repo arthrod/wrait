@@ -56,7 +56,7 @@ export class AI {
       });
 
       if (!responseStream) {
-        return; // or throw an error
+        throw new Error("Failed to get response stream from Litellm."); // Throw error if no stream
       }
 
       let message = "";
@@ -70,10 +70,12 @@ export class AI {
         onUpdate(message, abort);
       }
       return message; // Return the complete message
-    } catch (e) {
+    } catch (e: any) { // Catching as any to access error message
       console.error("Litellm API error:", e);
-      // Consider more specific error handling and reporting to the UI
-      throw e; // Re-throw to be caught by the caller (handleChatSubmit)
+      // More informative error message for UI if needed
+      const errorMessage = e.message || "An error occurred while processing your request.";
+      onUpdate(`Error: ${errorMessage}`, abort); // Send error message to chat UI
+      throw new Error(`Litellm API request failed: ${errorMessage}`); // Re-throw to be caught by the caller (handleChatSubmit)
     }
   }
 }
