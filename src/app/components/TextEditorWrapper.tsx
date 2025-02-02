@@ -42,6 +42,7 @@ import { EditorToolbar } from "../combini/EditorToolbar";
 import styles from "./TextEditorWrapper.module.css";
 import { EditorButton } from "../combini/EditorButton";
 import { ChangeAcceptanceCard } from "../combini/ChangeAcceptanceCard";
+import { ProseMirrorAdapterWrapper } from './ProseMIrror/ProseMirrorAdapterWrapper'; // Import the wrapper
 
 const initial = textSchema.node("doc", null, [
   textSchema.node("paragraph", null, [
@@ -55,29 +56,46 @@ const initial = textSchema.node("doc", null, [
 ]);
 
 function makeInitialState() {
+  // Create an empty document with a single empty paragraph
+  const doc = textSchema.node("doc", null, [
+    textSchema.node("paragraph", null, [
+      textSchema.text("")
+    ])
+  ]);
+
   return EditorState.create({
     schema: textSchema,
-    doc: initial,
+    doc,
     plugins: [
-      history(),
-      buildInputRules(),
+      // Core editing functionality
+      keymap(baseKeymap),  // Basic editing commands (Enter for new paragraph, etc)
+      history(),          // Undo/redo history
+      dropCursor(),       // Show cursor when dragging
+      gapCursor(),        // Allow selecting gaps between blocks
+
+      // Editor commands and shortcuts
       keymap({
+        "Mod-z": undo,
+        "Mod-y": redo,
         "Mod-b": toggleMark(textSchema.marks.bold),
         "Mod-i": toggleMark(textSchema.marks.italic),
         "Mod-u": toggleMark(textSchema.marks.underline),
         "Mod-`": toggleMark(textSchema.marks.code),
         "Mod-[": lift,
         "Mod->": wrapIn(textSchema.nodes.blockquote),
-        "Mod-z": undo,
-        "Mod-y": redo,
+        "Enter": baseKeymap["Enter"],  // Ensure Enter key works properly
+        "Delete": baseKeymap["Delete"],  // Ensure Delete key works properly
+        "Backspace": baseKeymap["Backspace"],  // Ensure Backspace key works properly
       }),
-      keymap(baseKeymap),
+
+      // Input rules for markdown-style input (should come after keymaps)
+      buildInputRules(),
+
+      // AI functionality
       actionsPlugin,
       autoCompletePlugin,
       ProofReadPlugin,
       SmartExpansionPlugin,
-      dropCursor(),
-      gapCursor(),
     ],
   });
 }
@@ -113,6 +131,31 @@ const FormatButton: React.FC<FormatButtonProps> = ({ icon, title, isActive, onCl
   </button>
 );
 
+// Define isMarkActive and isNodeActive here to be used in menuItems
+const isMarkActive = (state: EditorState, markType: string) => {
+  const { from, $from, to, empty } = state.selection;
+  if (empty) {
+    return !!state.storedMarks?.some(mark => mark.type.name === markType);
+  }
+  return state.doc.rangeHasMark(from, to, state.schema.marks[markType]);
+};
+
+const isNodeActive = (state: EditorState, nodeType: string, attrs: any = {}) => {
+  const { selection } = state;
+  
+  if (selection instanceof NodeSelection && selection.node) {
+    return selection.node.hasMarkup(state.schema.nodes[nodeType], attrs);
+  }
+
+  const $from = selection.$from;
+  const $to = selection.$to;
+  const range = $from.blockRange($to);
+
+  if (!range) return false;
+
+  return range.parent.hasMarkup(state.schema.nodes[nodeType], attrs);
+};
+
 export const TextEditorWrapper = ({
   onProgress,
   onLoadError,
@@ -142,33 +185,6 @@ export const TextEditorWrapper = ({
       },
       selectionType: "none",
     });
-
-  const isMarkActive = useCallback((markType: string) => {
-    if (!viewRef.current) return false;
-    const { from, $from, to, empty } = viewRef.current.state.selection;
-    if (empty) {
-      return !!viewRef.current.state.storedMarks?.some(mark => mark.type.name === markType);
-    }
-    return viewRef.current.state.doc.rangeHasMark(from, to, viewRef.current.state.schema.marks[markType]);
-  }, []);
-
-  const isNodeActive = useCallback((nodeType: string, attrs: any = {}) => {
-    if (!viewRef.current) return false;
-    const state = viewRef.current.state;
-    const { selection } = state;
-    
-    if (selection instanceof NodeSelection && selection.node) {
-      return selection.node.hasMarkup(state.schema.nodes[nodeType], attrs);
-    }
-
-    const $from = selection.$from;
-    const $to = selection.$to;
-    const range = $from.blockRange($to);
-
-    if (!range) return false;
-
-    return range.parent.hasMarkup(state.schema.nodes[nodeType], attrs);
-  }, []);
 
   const toggleFormat = useCallback((markType: string) => {
     if (viewRef.current) {
@@ -238,8 +254,48 @@ export const TextEditorWrapper = ({
               : "range",
         });
       },
+      handleDOMEvents: {
+        focus: () => {
+          // Update UI to show focused state if needed
+          return false; // Let ProseMirror handle the event
+        },
+        blur: () => {
+          // Update UI to show blurred state if needed
+          return false; // Let ProseMirror handle the event
+        },
+        keydown: (view, event) => {
+          // Handle special keys if needed
+          if (event.key === 'Tab') {
+            // Let ProseMirror handle Tab for autocompletion
+            return false;
+          }
+          if (event.key === 'Enter') {
+            // Let ProseMirror handle Enter for new paragraphs
+            return false;
+          }
+          // Let ProseMirror handle all other keys
+          return false;
+        },
+        paste: (view, event) => {
+          // Let ProseMirror handle paste events
+          return false;
+        },
+        drop: (view, event) => {
+          // Let ProseMirror handle drop events
+          return false;
+        }
+      },
+      attributes: {
+        spellcheck: 'true'
+      }
     });
-    editorView.focus();
+    
+    // Focus the editor after initialization
+    requestAnimationFrame(() => {
+      if (editorView && domRef.current) {
+        editorView.focus();
+      }
+    });
 
     // Initialize AI with backend configuration
     const ai = new AI({
@@ -309,55 +365,56 @@ export const TextEditorWrapper = ({
   const outerDomRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className={styles.content} ref={outerDomRef}>
-      <Card>
-        <EditorToolbar className={styles.toolbar}>
-          <FormatButton
+    <ProseMirrorAdapterWrapper>
+      <div className={styles.content} ref={outerDomRef}>
+        <Card>
+          <EditorToolbar className={styles.toolbar}>
+            <FormatButton
             icon="H1"
             title="Heading 1"
-            isActive={isNodeActive('heading', { level: 1 })}
+            isActive={viewRef.current ? isNodeActive(viewRef.current.state, 'heading', { level: 1 }) : false}
             onClick={() => setHeading(1)}
           />
           <FormatButton
             icon="H2"
             title="Heading 2"
-            isActive={isNodeActive('heading', { level: 2 })}
+            isActive={viewRef.current ? isNodeActive(viewRef.current.state, 'heading', { level: 2 }) : false}
             onClick={() => setHeading(2)}
           />
           <FormatButton
             icon="B"
             title="Bold"
-            isActive={isMarkActive('bold')}
+            isActive={viewRef.current ? isMarkActive(viewRef.current.state, 'bold') : false}
             onClick={() => toggleFormat('bold')}
           />
           <FormatButton
             icon="I"
             title="Italic"
-            isActive={isMarkActive('italic')}
+            isActive={viewRef.current ? isMarkActive(viewRef.current.state, 'italic') : false}
             onClick={() => toggleFormat('italic')}
           />
           <FormatButton
             icon="U"
             title="Underline"
-            isActive={isMarkActive('underline')}
+            isActive={viewRef.current ? isMarkActive(viewRef.current.state, 'underline') : false}
             onClick={() => toggleFormat('underline')}
           />
           <FormatButton
             icon="H"
             title="Highlight"
-            isActive={isMarkActive('highlight')}
+            isActive={viewRef.current ? isMarkActive(viewRef.current.state, 'highlight') : false}
             onClick={() => toggleFormat('highlight')}
           />
           <FormatButton
             icon="C"
             title="Code"
-            isActive={isMarkActive('code')}
+            isActive={viewRef.current ? isMarkActive(viewRef.current.state, 'code') : false}
             onClick={() => toggleFormat('code')}
           />
           <FormatButton
             icon="❝"
             title="Blockquote"
-            isActive={isNodeActive('blockquote')}
+            isActive={viewRef.current ? isNodeActive(viewRef.current.state, 'blockquote') : false}
             onClick={() => {
               if (viewRef.current) {
                 wrapIn(textSchema.nodes.blockquote)(
@@ -370,7 +427,7 @@ export const TextEditorWrapper = ({
           <FormatButton
             icon="1."
             title="Ordered List"
-            isActive={isNodeActive('ordered_list')}
+            isActive={viewRef.current ? isNodeActive(viewRef.current.state, 'ordered_list') : false}
             onClick={() => {
               if (viewRef.current) {
                 wrapIn(textSchema.nodes.ordered_list)(
@@ -383,7 +440,7 @@ export const TextEditorWrapper = ({
           <FormatButton
             icon="•"
             title="Bullet List"
-            isActive={isNodeActive('bullet_list')}
+            isActive={viewRef.current ? isNodeActive(viewRef.current.state, 'bullet_list') : false}
             onClick={() => {
               if (viewRef.current) {
                 wrapIn(textSchema.nodes.bullet_list)(
@@ -607,6 +664,6 @@ export const TextEditorWrapper = ({
         onSubmit={handleCustomAIPrompt}
       />
     </div>
+  </ProseMirrorAdapterWrapper>
   );
 };
-

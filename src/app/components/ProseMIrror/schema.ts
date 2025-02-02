@@ -5,14 +5,16 @@ export const textSchema = new Schema({
   nodes: {
     text: {
       group: "inline",
+      inline: true,
+      toDOM() { return ["span", 0] }
     },
     paragraph: {
       group: "block",
       content: "inline*",
       toDOM() {
-        return ["p", 0];
+        return ["div", { "data-node-view-wrapper": "", "data-placeholder": "Type something..." }, ["p", {"data-node-view-content": ""}, 0]];
       },
-      parseDOM: [{ tag: "p" }],
+      parseDOM: [{ tag: "div" }],
     },
     heading: {
       attrs: { level: { default: 1 } },
@@ -91,6 +93,7 @@ export const textSchema = new Schema({
           0,
         ];
       },
+      // markView: AutoCompleteMark, // Remove direct markView, adapter will handle it
     },
     bold: {
       parseDOM: [

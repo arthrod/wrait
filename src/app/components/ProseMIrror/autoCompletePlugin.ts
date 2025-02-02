@@ -9,6 +9,8 @@ import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import { textSchema } from "./schema";
 import { Mapping } from "prosemirror-transform";
 import { getAI } from "@/app/api/ai/viewAI";
+import { useMarkViewFactory } from '@prosemirror-adapter/react'; // Import hook
+import { AutoCompleteSuggestion } from './AutoCompleteSuggestion'; // Import React Component
 
 const pluginKey = new PluginKey("autoComplete");
 
@@ -163,8 +165,17 @@ export const autoCompletePlugin = new Plugin<PluginState>({
         return acceptAutoComplete(view);
       } else if (event.key == "." && event.metaKey) {
         performAutoComplete(view);
+        return true;
       }
     },
+    markViews: { // Add markViews prop
+      autoComplete: (mark, view) => {
+        const factory = useMarkViewFactory(); // Use the hook inside markViews
+        return factory({
+          component: AutoCompleteSuggestion,
+        })(mark, view);
+      },
+    }
   },
   view(editorView) {
     return {
@@ -230,8 +241,10 @@ function createOrUpdateAutoComplete(
   }
   tr = tr.insert(
     autoComplete.pos,
-    textSchema.text(autoComplete.content, [
-      textSchema.marks.autoComplete.create(),
+    textSchema.node("paragraph", null, [
+      textSchema.text(autoComplete.content, [
+        textSchema.marks.autoComplete.create(),
+      ]),
     ])
   );
   return tr
