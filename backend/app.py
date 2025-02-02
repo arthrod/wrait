@@ -229,6 +229,37 @@ async def complete():
         return handle_error(e)
 
 
+# Document storage
+documents = {}
+
+
+@app.route('/api/document/save', methods=['POST', 'OPTIONS'])
+@validate_request
+async def save_document():
+    """Save document state"""
+    try:
+        data = await request.get_json()
+        if 'id' not in data or 'content' not in data:
+            raise AIServiceError("Missing 'id' or 'content' field", 400)
+
+        doc_id = data['id']
+        documents[doc_id] = {'content': data['content'], 'timestamp': datetime.now().isoformat()}
+        return Response(json.dumps({'status': 'success'}), mimetype='application/json')
+    except Exception as e:
+        return handle_error(e)
+
+
+@app.route('/api/document/load/<doc_id>', methods=['GET', 'OPTIONS'])
+async def load_document(doc_id):
+    """Load document state"""
+    try:
+        if doc_id not in documents:
+            raise AIServiceError('Document not found', 404)
+        return Response(json.dumps(documents[doc_id]), mimetype='application/json')
+    except Exception as e:
+        return handle_error(e)
+
+
 if __name__ == '__main__':
     print('Starting server on port 5002...')  # Log server start
     app.run(debug=True, port=5002)

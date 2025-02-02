@@ -1,11 +1,12 @@
-"use client";
-
-import { MutableRefObject, useEffect, useRef, useState } from "react";
-import { EditorState } from "prosemirror-state";
+import { MutableRefObject, useCallback, useEffect, useRef, useState } from "react";
+import { DocumentManager } from "../api/document/documentManager";
+import { AIPromptDialog } from "./AIPromptDialog";
+import { EditorState, NodeSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { keymap } from "prosemirror-keymap";
 import { history, redo, undo } from "prosemirror-history";
-import { baseKeymap } from "prosemirror-commands";
+import { baseKeymap, setBlockType, wrapIn, lift, toggleMark } from "prosemirror-commands";
+import { buildInputRules } from "./ProseMIrror/inputRules";
 import { dropCursor } from "prosemirror-dropcursor";
 import { gapCursor } from "prosemirror-gapcursor";
 import { actionsPlugin } from "./ProseMIrror/actionsPlugin";
@@ -59,11 +60,18 @@ function makeInitialState() {
     doc: initial,
     plugins: [
       history(),
-      keymap(baseKeymap),
+      buildInputRules(),
       keymap({
-        "mod-z": undo,
-        "mod-y": redo,
+        "Mod-b": toggleMark(textSchema.marks.bold),
+        "Mod-i": toggleMark(textSchema.marks.italic),
+        "Mod-u": toggleMark(textSchema.marks.underline),
+        "Mod-`": toggleMark(textSchema.marks.code),
+        "Mod-[": lift,
+        "Mod->": wrapIn(textSchema.nodes.blockquote),
+        "Mod-z": undo,
+        "Mod-y": redo,
       }),
+      keymap(baseKeymap),
       actionsPlugin,
       autoCompletePlugin,
       ProofReadPlugin,
@@ -88,6 +96,23 @@ type EditorDerivedState = {
   selectionType: SelectionType;
 };
 
+interface FormatButtonProps {
+  icon: string;
+  title: string;
+  isActive: boolean;
+  onClick: () => void;
+}
+
+const FormatButton: React.FC<FormatButtonProps> = ({ icon, title, isActive, onClick }) => (
+  <button
+    className={`${styles.formatButton} ${isActive ? styles.active : ''}`}
+    onClick={onClick}
+    title={title}
+  >
+    {icon}
+  </button>
+);
+
 export const TextEditorWrapper = ({
   onProgress,
   onLoadError,
@@ -99,6 +124,8 @@ export const TextEditorWrapper = ({
   onHasLoadedAI: () => void;
   hasLoadedAI: boolean;
 }) => {
+  const [isAIPromptOpen, setIsAIPromptOpen] = useState(false);
+  const documentManager = useRef(DocumentManager.getInstance());
   const domRef = useRef<HTMLDivElement>() as MutableRefObject<HTMLDivElement>;
   const viewRef = useRef<EditorView | null>(null);
   const [editorDerivedState, setEditorDerivedState] =
@@ -116,31 +143,103 @@ export const TextEditorWrapper = ({
       selectionType: "none",
     });
 
+  const isMarkActive = useCallback((markType: string) => {
+    if (!viewRef.current) return false;
+    const { from, $from, to, empty } = viewRef.current.state.selection;
+    if (empty) {
+      return !!viewRef.current.state.storedMarks?.some(mark => mark.type.name === markType);
+    }
+    return viewRef.current.state.doc.rangeHasMark(from, to, viewRef.current.state.schema.marks[markType]);
+  }, []);
+
+  const isNodeActive = useCallback((nodeType: string, attrs: any = {}) => {
+    if (!viewRef.current) return false;
+    const state = viewRef.current.state;
+    const { selection } = state;
+    
+    if (selection instanceof NodeSelection && selection.node) {
+      return selection.node.hasMarkup(state.schema.nodes[nodeType], attrs);
+    }
+
+    const $from = selection.$from;
+    const $to = selection.$to;
+    const range = $from.blockRange($to);
+
+    if (!range) return false;
+
+    return range.parent.hasMarkup(state.schema.nodes[nodeType], attrs);
+  }, []);
+
+  const toggleFormat = useCallback((markType: string) => {
+    if (viewRef.current) {
+      const command = toggleMark(viewRef.current.state.schema.marks[markType]);
+      command(viewRef.current.state, viewRef.current.dispatch);
+    }
+  }, []);
+
+  const setHeading = useCallback((level: number) => {
+    if (viewRef.current) {
+      const command = setBlockType(viewRef.current.state.schema.nodes.heading, { level });
+      command(viewRef.current.state, viewRef.current.dispatch);
+    }
+  }, []);
+
+  const handleCustomAIPrompt = useCallback((prompt: string) => {
+    if (viewRef.current) {
+      const view = viewRef.current;
+      const { from, to } = view.state.selection;
+      const selectedText = view.state.doc.textBetween(from, to);
+      
+      // Add custom system message
+      const fullPrompt = `Instructions: ${prompt}\n\n${selectedText}`;
+      
+      // Use the AI to process the text
+      const ai = new AI();
+      ai.request(
+        { messages: [{ role: 'user', content: fullPrompt }], temperature: 0.7 },
+        (text) => {
+          const tr = view.state.tr.replaceWith(
+            from,
+            to,
+            view.state.schema.text(text)
+          );
+          view.dispatch(tr);
+        }
+      );
+    }
+  }, []);
+
   useEffect(() => {
     if (viewRef.current) {
       return;
     }
-    const view = new EditorView(domRef.current, {
-      state: makeInitialState(),
+    const initialState = makeInitialState();
+    const editorView = new EditorView(domRef.current, {
+      state: initialState,
       dispatchTransaction: (tr) => {
         const view = viewRef.current;
         if (!view) {
           return;
         }
-        view.updateState(view.state.apply(tr));
+        const newState = view.state.apply(tr);
+        view.updateState(newState);
+        
+        // Save document state after each transaction
+        documentManager.current.saveDocument(newState).catch(console.error);
+        
         setEditorDerivedState({
-          proofReadState: getProofReadDerivedState(view.state),
-          autoCompleteState: getAutoCompleteDerivedState(view.state),
-          smartExpansionState: getSmartExpansionState(view.state),
+          proofReadState: getProofReadDerivedState(newState),
+          autoCompleteState: getAutoCompleteDerivedState(newState),
+          smartExpansionState: getSmartExpansionState(newState),
           selectionType: !view.hasFocus()
             ? "none"
-            : view.state.selection.from === view.state.selection.to
+            : newState.selection.from === newState.selection.to
               ? "single"
               : "range",
         });
       },
     });
-    view.focus();
+    editorView.focus();
 
     // Initialize AI with backend configuration
     const ai = new AI({
@@ -148,14 +247,18 @@ export const TextEditorWrapper = ({
       maxRetries: 3,
       retryDelay: 1000
     });
-    setAI(view, ai);
+    setAI(editorView, ai);
 
     // No need to load since we're using the backend
     onProgress(1);
     onHasLoadedAI();
 
-    viewRef.current = view;
-  }, []);
+    viewRef.current = editorView;
+
+    // Start auto-save
+    documentManager.current.startAutoSave(initialState);
+    return () => documentManager.current.stopAutoSave();
+  }, [onProgress, onHasLoadedAI]);
 
   const activeProofRead = editorDerivedState.proofReadState.activeProofRead;
 
@@ -209,6 +312,93 @@ export const TextEditorWrapper = ({
     <div className={styles.content} ref={outerDomRef}>
       <Card>
         <EditorToolbar className={styles.toolbar}>
+          <FormatButton
+            icon="H1"
+            title="Heading 1"
+            isActive={isNodeActive('heading', { level: 1 })}
+            onClick={() => setHeading(1)}
+          />
+          <FormatButton
+            icon="H2"
+            title="Heading 2"
+            isActive={isNodeActive('heading', { level: 2 })}
+            onClick={() => setHeading(2)}
+          />
+          <FormatButton
+            icon="B"
+            title="Bold"
+            isActive={isMarkActive('bold')}
+            onClick={() => toggleFormat('bold')}
+          />
+          <FormatButton
+            icon="I"
+            title="Italic"
+            isActive={isMarkActive('italic')}
+            onClick={() => toggleFormat('italic')}
+          />
+          <FormatButton
+            icon="U"
+            title="Underline"
+            isActive={isMarkActive('underline')}
+            onClick={() => toggleFormat('underline')}
+          />
+          <FormatButton
+            icon="H"
+            title="Highlight"
+            isActive={isMarkActive('highlight')}
+            onClick={() => toggleFormat('highlight')}
+          />
+          <FormatButton
+            icon="C"
+            title="Code"
+            isActive={isMarkActive('code')}
+            onClick={() => toggleFormat('code')}
+          />
+          <FormatButton
+            icon="❝"
+            title="Blockquote"
+            isActive={isNodeActive('blockquote')}
+            onClick={() => {
+              if (viewRef.current) {
+                wrapIn(textSchema.nodes.blockquote)(
+                  viewRef.current.state,
+                  viewRef.current.dispatch
+                );
+              }
+            }}
+          />
+          <FormatButton
+            icon="1."
+            title="Ordered List"
+            isActive={isNodeActive('ordered_list')}
+            onClick={() => {
+              if (viewRef.current) {
+                wrapIn(textSchema.nodes.ordered_list)(
+                  viewRef.current.state,
+                  viewRef.current.dispatch
+                );
+              }
+            }}
+          />
+          <FormatButton
+            icon="•"
+            title="Bullet List"
+            isActive={isNodeActive('bullet_list')}
+            onClick={() => {
+              if (viewRef.current) {
+                wrapIn(textSchema.nodes.bullet_list)(
+                  viewRef.current.state,
+                  viewRef.current.dispatch
+                );
+              }
+            }}
+          />
+          <EditorButton
+            action={() => setIsAIPromptOpen(true)}
+            disabled={!hasLoadedAI}
+            label="Custom AI"
+            shortcut="mod+shift+p"
+          />
           <EditorButton
             action={() => {
               if (viewRef.current) {
@@ -411,6 +601,12 @@ export const TextEditorWrapper = ({
           );
         }
       })()}
+      <AIPromptDialog
+        open={isAIPromptOpen}
+        onClose={() => setIsAIPromptOpen(false)}
+        onSubmit={handleCustomAIPrompt}
+      />
     </div>
   );
 };
+

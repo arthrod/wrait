@@ -7,6 +7,10 @@ declare const styles: {
   readonly deleteStyle: string;
   readonly expandingLoading: string;
   readonly autoComplete: string;
+  readonly aiPromptForm: string;
+  readonly dialogButtons: string;
+  readonly formatButton: string;
+  readonly active: string;
 };
 
 export default styles;
