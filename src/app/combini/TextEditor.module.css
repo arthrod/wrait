@@ -12,10 +12,54 @@
   font-family: var(--font-family-base);
   font-size: var(--font-size-md);
   line-height: var(--line-height-lg);
+  cursor: text;
+  position: relative;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  tab-size: 4;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+.editor:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-primary-light);
 }
 
 .editor :global(.ProseMirror) {
   outline: none;
+  height: 100%;
+  min-height: inherit;
+  position: relative;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  -webkit-font-variant-ligatures: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0;
+  caret-color: var(--color-primary);
+  -webkit-user-modify: read-write;
+  overflow-wrap: break-word;
+  -webkit-line-break: after-white-space;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.editor :global(.ProseMirror-focused) {
+  outline: none;
+}
+
+/* Improve text selection visibility */
+.editor :global(.ProseMirror)::selection {
+  background: var(--color-primary-light);
+}
+
+/* Ensure placeholder text is visible */
+.editor :global(.ProseMirror) p.is-empty:first-child::before {
+  color: var(--color-text-secondary);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
 }
 
 .editor :global(.ProseMirror p) {

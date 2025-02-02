@@ -15,7 +15,7 @@ from quart_cors import cors
 load_dotenv()
 
 app = Quart(__name__)
-app = cors(app, allow_origin=['http://localhost:5174', 'http://127.0.0.1:5174'])
+app = cors(app, allow_origin=['http://localhost:5173', 'http://127.0.0.1:5173'])
 
 # Environment validation
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -225,6 +225,37 @@ async def complete():
         data['temperature'] = min(data.get('temperature', 0.7), 0.8)
         data['system_message'] = 'You are a helpful AI assistant. Complete the text naturally and coherently.'
         return await handle_streaming_response(data, user_context=await get_user_context())
+    except Exception as e:
+        return handle_error(e)
+
+
+# Document storage
+documents = {}
+
+
+@app.route('/api/document/save', methods=['POST', 'OPTIONS'])
+@validate_request
+async def save_document():
+    """Save document state"""
+    try:
+        data = await request.get_json()
+        if 'id' not in data or 'content' not in data:
+            raise AIServiceError("Missing 'id' or 'content' field", 400)
+
+        doc_id = data['id']
+        documents[doc_id] = {'content': data['content'], 'timestamp': datetime.now().isoformat()}
+        return Response(json.dumps({'status': 'success'}), mimetype='application/json')
+    except Exception as e:
+        return handle_error(e)
+
+
+@app.route('/api/document/load/<doc_id>', methods=['GET', 'OPTIONS'])
+async def load_document(doc_id):
+    """Load document state"""
+    try:
+        if doc_id not in documents:
+            raise AIServiceError('Document not found', 404)
+        return Response(json.dumps(documents[doc_id]), mimetype='application/json')
     except Exception as e:
         return handle_error(e)
 

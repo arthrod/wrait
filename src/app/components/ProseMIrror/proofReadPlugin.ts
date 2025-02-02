@@ -7,6 +7,8 @@ import {
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import { Node } from "prosemirror-model";
 import { ProofReadController } from "./ProofReadController";
+import { useNodeViewFactory } from '@prosemirror-adapter/react'; // Import hook
+import { ProofreadSuggestion } from './ProofreadSuggestion'; // Import React Component
 
 const styles = {
   deleteStyle: "deleteStyle",
@@ -134,13 +136,25 @@ export const ProofReadPlugin = new Plugin<State>({
         createDiffsDecorations(pluginState.proofReads)
       );
     },
+    nodeViews: { // Add nodeViews prop
+      proofread_suggestion: (node, view, getPos) => {
+        const factory = useNodeViewFactory(); // Use the hook inside nodeViews
+        return factory({
+          component: ProofreadSuggestion,
+        })(node, view, getPos);
+      },
+    }
   },
 });
 
 function createDiffsDecorations(diffs: ProofRead[]): Decoration[] {
   return diffs.map((diff) => {
     if (diff.from === diff.to) {
-      return Decoration.widget(diff.from, createInsertionWidget(diff));
+      return Decoration.node(diff.from, diff.from, {
+        type: 'proofread_suggestion',
+        class: styles.insertStyle,
+        "data-pf-diff": JSON.stringify(diff),
+      });
     } else if (diff.diff === "") {
       return Decoration.inline(diff.from, diff.to, {
         class: styles.deleteStyle,

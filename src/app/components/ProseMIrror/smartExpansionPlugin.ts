@@ -2,6 +2,8 @@ import { getAI } from "@/app/api/ai/viewAI";
 import { Plugin, PluginKey, EditorState, Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import styles from "./../TextEditorWrapper.module.css";
+import { useWidgetViewFactory } from '@prosemirror-adapter/react'; // Import hook
+import { ExpansionWidget } from './ExpansionWidget'; // Import React Component
 
 export type SmartExpansionState =
   | {
@@ -145,8 +147,15 @@ export const SmartExpansionPlugin = new Plugin<SmartExpansionState>({
             }),
           ]);
         case "hintGenerating":
+        case "generating":
+          const widgetFactory = useWidgetViewFactory(); // Use hook here
+          const widget = widgetFactory({
+            component: ExpansionWidget,
+            as: 'span',
+          });
           return DecorationSet.create(state.doc, [
-            Decoration.inline(pluginState.from, pluginState.to, {
+            widget(pluginState.from, { side: -1 }), // Widget decoration
+            Decoration.inline(pluginState.from, pluginState.to, { // Inline decoration
               class: styles.expandingLoading,
             }),
           ]);
@@ -299,7 +308,6 @@ async function fetchAiExpansion(
   let generatedText = "";
   await getAI(view)?.request(
     {
-      stream: true,
       messages: [
         {
           role: "system",
@@ -337,7 +345,6 @@ async function fetchAiRewrite(
   let generatedText = "";
   await getAI(view)?.request(
     {
-      stream: true,
       messages: [
         {
           role: "system",

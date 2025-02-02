@@ -46,3 +46,33 @@
 .autoComplete {
   background-color: var(--color-gray-100);
 }
+
+.aiPromptForm {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.dialogButtons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+.formatButton {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.formatButton:hover {
+  background-color: var(--color-background-secondary);
+}
+
+.formatButton.active {
+  background-color: var(--color-background-secondary);
+  color: var(--color-primary);
+}
